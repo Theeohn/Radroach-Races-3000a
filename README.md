@@ -13,7 +13,7 @@
 
 ### Description
 
-A version of the internet famous "Horse Race Tests" game now for your pipboy. Start the game up, three seconds to place your bets and they're off! Using logic similar to the DVD bouncing logo to race to the mutfruit at the end, who will win? Five seperate tracks, five shapes for your roaches. Endless hours of fun watching, betting, and forming your own headcanons!
+A version of the internet famous "Horse Race Tests" game now for your Pip-boy. Start the game up, eight seconds to place your bets and they're off! Using logic similar to the DVD bouncing logo to race to the mutfruit at the end, who will win? Five seperate tracks, five shapes for your roaches. Endless hours of fun watching, betting, and forming your own headcanons!
 
 ### Controls
 
