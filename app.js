@@ -7,185 +7,222 @@
 (function() {
   let mainLoopInterval = null;
   let countdownTimer = null;
-
-  // Screen Geometry Coordinates
-  const SCREEN_WIDTH = 480;
-  const SCREEN_HEIGHT = 320;
-  
-  const PLAY_AREA = { x1: 15, x2: SCREEN_WIDTH - 15, y1: 45, y2: SCREEN_HEIGHT - 25 };
+  let clickWatchHandle = null;
 
   // Game States
-  let gameState = 'TITLE_SCREEN'; // 'TITLE_SCREEN', 'COUNTDOWN', 'RACING', 'GAMEOVER'
+  let gameState = 'TITLE_SCREEN';
   let winnerId = -1;
   let countdownValue = 8;
-
-  // Radroach Configuration
-  const BLOCK_SIZE = 14; 
-  let radroaches = [];
-  
-  const SHAPE_NAMES = { 1: 'SQUARE', 2: 'TRIANGLE', 3: 'DIAMOND', 4: 'CROSS', 5: 'HEXAGON' };
-
-  // Track Layout Blueprints & Fruit Goal Configurations
   let currentMapId = 0;
   let trackWalls = [];
-  let goalPos = { x: 0, y: 0, w: 30, h: 30 }; 
+  let goalPos = { x: 0, y: 0, w: 30, h: 30 };
   let startX = 0;
   let startYBase = 0;
+  let radroaches = [];
+
+  // Sound limiter — max 2 bounce sound instances at once
+  let bounceSoundCount = 0;
+
+  const BLOCK_SIZE = 14;
+  const SHAPE_NAMES = { 1: 'SQUARE', 2: 'TRIANGLE', 3: 'DIAMOND', 4: 'CROSS', 5: 'HEXAGON' };
+
+  // Play area: 480x320 screen, with margin
+  // PLAY_AREA: x1=15, x2=465, y1=45, y2=295
+
+  // MAP_BLUEPRINTS derived from Horse Race Test map images.
+  // Walls are line segments (x1,y1)-(x2,y2) representing internal barriers.
+  // Outer boundary enforcement is handled by PLAY_AREA bounce logic.
+  // Start positions are from the yellow START box (top-left region of each map).
+  // Goal positions are from the checkered flag square in each map image.
+  //
+  // Map coordinate space: 480x320, play area inset 15px each side, 45px top, 25px bottom.
+  // Wall coordinates are scaled/mapped from each image's proportional layout.
 
   const MAP_BLUEPRINTS = [
-    // Map 1: Winding S-Tunnel Architecture
+    // Map 1: S-shaped winding tunnel with two horizontal corridors and two vertical connectors.
+    // Start: top-left. Goal: center-right area (checkered flag near x=340, y=240 in image).
     {
-      goal: { x: 410, y: 140 },
-      start: { x: 35, y: 55 },
+      goal: { x: 330, y: 215 },
+      start: { x: 30, y: 55 },
       walls: [
-        {x1: 20, y1: 170, x2: 320, y2: 170},
-        {x1: 140, y1: 240, x2: 460, y2: 240},
-        {x1: 320, y1: 45,  x2: 320, y2: 170},
-        {x1: 140, y1: 170, x2: 140, y2: 295}
+        // Upper horizontal divider — splits top corridor from mid section
+        { x1: 15,  y1: 155, x2: 270, y2: 155 },
+        // Lower horizontal divider — creates bottom corridor
+        { x1: 200, y1: 220, x2: 465, y2: 220 },
+        // Left vertical connector — joins upper and mid dividers
+        { x1: 270, y1: 55,  x2: 270, y2: 155 },
+        // Right vertical connector — joins mid and lower dividers
+        { x1: 200, y1: 155, x2: 200, y2: 285 }
       ]
     },
-    // Map 2: Central Funnel with Branching Paths
+    // Map 2: Large open floor with a central U-shaped funnel and a left side pocket.
+    // Start: top-left. Goal: center (checkered flag near x=270, y=215 in image).
     {
-      goal: { x: 420, y: 230 },
-      start: { x: 35, y: 90 },
+      goal: { x: 260, y: 205 },
+      start: { x: 30, y: 100 },
       walls: [
-        {x1: 20, y1: 70,   x2: 200, y2: 70},
-        {x1: 200, y1: 70,  x2: 200, y2: 190},
-        {x1: 200, y1: 190, x2: 360, y2: 190},
-        {x1: 100, y1: 190, x2: 100, y2: 295}
+        // Top horizontal bar cutting upper-right off
+        { x1: 15,  y1: 95,  x2: 185, y2: 95  },
+        // Vertical drop from top bar — forms left wall of funnel
+        { x1: 185, y1: 95,  x2: 185, y2: 200 },
+        // Bottom of funnel — horizontal join
+        { x1: 185, y1: 200, x2: 310, y2: 200 },
+        // Left side pocket wall — partial vertical on left
+        { x1: 80,  y1: 200, x2: 80,  y2: 285 }
       ]
     },
-    // Map 3: Core Labyrinth Obstacle Block
+    // Map 3: Jagged rocky terrain with a diagonal central obstacle and upper corridor blocker.
+    // Start: top-left. Goal: left-center (checkered flag near x=250, y=235 in image).
     {
-      goal: { x: 410, y: 70 },
-      start: { x: 35, y: 180 },
+      goal: { x: 240, y: 225 },
+      start: { x: 30, y: 185 },
       walls: [
-        {x1: 120, y1: 45,  x2: 120, y2: 160},
-        {x1: 120, y1: 160, x2: 340, y2: 160},
-        {x1: 240, y1: 210, x2: 460, y2: 210}
+        // Upper wall — cuts off top passage, forcing left or right routing
+        { x1: 100, y1: 55,  x2: 100, y2: 170 },
+        // Mid horizontal — central barrier across map
+        { x1: 100, y1: 170, x2: 310, y2: 170 },
+        // Lower right horizontal — forces lower path on right side
+        { x1: 210, y1: 220, x2: 465, y2: 220 }
       ]
     },
-    // Map 4: Dual Multi-Lane Corridor Split
+    // Map 4: Boxy corridors with a large hollow central rectangle (room with no exit until corners).
+    // Start: top-left. Goal: left-center pocket (checkered flag near x=65, y=215 in image).
     {
-      goal: { x: 425, y: 145 },
-      start: { x: 35, y: 110 },
+      goal: { x: 55, y: 205 },
+      start: { x: 30, y: 110 },
       walls: [
-        {x1: 100, y1: 90,  x2: 380, y2: 90},
-        {x1: 100, y1: 230, x2: 380, y2: 230},
-        {x1: 100, y1: 90,  x2: 100, y2: 230}
+        // Top bar of central box
+        { x1: 130, y1: 105, x2: 385, y2: 105 },
+        // Bottom bar of central box
+        { x1: 130, y1: 245, x2: 385, y2: 245 },
+        // Left bar of central box
+        { x1: 130, y1: 105, x2: 130, y2: 245 },
+        // Right bar of central box
+        { x1: 385, y1: 105, x2: 385, y2: 245 }
       ]
     },
-    // Map 5: Diagonal Switchback Track
+    // Map 5: Organic blob terrain with a winding path. Two horizontal bands create level splits.
+    // Start: top-left. Goal: right-center (checkered flag near x=390, y=210 in image).
     {
-      goal: { x: 390, y: 240 },
-      start: { x: 35, y: 55 },
+      goal: { x: 380, y: 200 },
+      start: { x: 30, y: 55 },
       walls: [
-        {x1: 20, y1: 160,  x2: 380, y2: 160},
-        {x1: 100, y1: 235, x2: 460, y2: 235}
+        // Upper horizontal band — forces traffic to split above or below
+        { x1: 15,  y1: 165, x2: 355, y2: 165 },
+        // Lower horizontal band — second level split
+        { x1: 90,  y1: 240, x2: 465, y2: 240 }
       ]
     }
   ];
 
-  let clickWatchHandle = null;
+  // ─── Sound helpers ────────────────────────────────────────────────────────
+
+  function playBounceSound() {
+    if (bounceSoundCount >= 2) return;
+    bounceSoundCount++;
+    Pip.playSound('HOLO/RADROACH_RACES/INSECTFLAP.WAV');
+    // Release the slot after ~120ms (approximate SCROLL sound duration)
+    setTimeout(function() {
+      if (bounceSoundCount > 0) bounceSoundCount--;
+    }, 120);
+  }
+
+  // ─── Title Screen ─────────────────────────────────────────────────────────
 
   function showTitleScreen() {
     gameState = 'TITLE_SCREEN';
     winnerId = -1;
-    
-    h.setColor(0).fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
-    h.setColor(1).drawRect(PLAY_AREA.x1, PLAY_AREA.y1, PLAY_AREA.x2, PLAY_AREA.y2);
-    
-    // Header text rendering alignment blocks
+
+    h.setColor(0).fillRect(0, 0, 480, 320);
+    h.setColor(1).drawRect(15, 45, 465, 295);
+
     h.setFont("Monofonto23").setFontAlign(0, -1).setColor(3);
-    h.drawString("Radroach Races", SCREEN_WIDTH / 2, PLAY_AREA.y1 + 10);
-    
-    // Background Fence Vector Line Blocks
+    h.drawString("Radroach Races", 240, 55);
+
+    // Fence backdrop
     h.setColor(2);
-    h.drawLine(PLAY_AREA.x1 + 40, 180, PLAY_AREA.x2 - 40, 180);
-    h.drawLine(PLAY_AREA.x1 + 40, 200, PLAY_AREA.x2 - 40, 200);
-    for (let fx = PLAY_AREA.x1 + 60; fx < PLAY_AREA.x2 - 40; fx += 35) {
+    h.drawLine(55, 180, 425, 180);
+    h.drawLine(55, 200, 425, 200);
+    for (let fx = 75; fx < 425; fx += 35) {
       h.fillRect(fx, 150, fx + 15, 230);
     }
-    
-    // Background Grass Strand Elements
-    for (let gx = PLAY_AREA.x1 + 20; gx < PLAY_AREA.x2 - 20; gx += 12) {
+
+    // Grass tufts
+    for (let gx = 35; gx < 445; gx += 12) {
       h.drawLine(gx, 230, gx - 4, 210);
       h.drawLine(gx + 3, 230, gx + 6, 205);
     }
 
-    // Centered Large Cockroach Vector Asset Graphics
+    // Cockroach vector art
     h.setColor(1);
-    h.fillEllipse(SCREEN_WIDTH / 2 - 40, 165, SCREEN_WIDTH / 2 + 40, 215); // Shell
-    h.fillCircle(SCREEN_WIDTH / 2, 150, 18); // Head
-    // Antennae
-    h.drawLine(SCREEN_WIDTH / 2 - 4, 138, SCREEN_WIDTH / 2 - 35, 105);
-    h.drawLine(SCREEN_WIDTH / 2 + 4, 138, SCREEN_WIDTH / 2 + 35, 105);
-    // Jointed Legs Vector Map Arrays
-    h.drawPoly([SCREEN_WIDTH / 2 - 35, 165, SCREEN_WIDTH / 2 - 60, 175, SCREEN_WIDTH / 2 - 75, 200], false);
-    h.drawPoly([SCREEN_WIDTH / 2 - 40, 190, SCREEN_WIDTH / 2 - 65, 200, SCREEN_WIDTH / 2 - 80, 230], false);
-    h.drawPoly([SCREEN_WIDTH / 2 + 35, 165, SCREEN_WIDTH / 2 + 60, 175, SCREEN_WIDTH / 2 + 75, 200], false);
-    h.drawPoly([SCREEN_WIDTH / 2 + 40, 190, SCREEN_WIDTH / 2 + 65, 200, SCREEN_WIDTH / 2 + 80, 230], false);
+    h.fillEllipse(200, 165, 280, 215);
+    h.fillCircle(240, 150, 18);
+    h.drawLine(236, 138, 205, 105);
+    h.drawLine(244, 138, 275, 105);
+    h.drawPoly([205, 165, 180, 175, 165, 200], false);
+    h.drawPoly([200, 190, 175, 200, 160, 230], false);
+    h.drawPoly([275, 165, 300, 175, 315, 200], false);
+    h.drawPoly([280, 190, 305, 200, 320, 230], false);
 
-    // Interactive Action Interface Banners
     h.setFont("Monofonto16").setFontAlign(0, -1).setColor(3);
-    h.drawString("PRESS LEFT KNOB TO START!", SCREEN_WIDTH / 2, PLAY_AREA.y2 - 25);
+    h.drawString("PRESS LEFT WHEEL TO START!", 240, 270);
 
     h.flip();
     Pip.lastFlip = getTime();
-    
-    // Hook into left dial knob1 triggers for game initialization routing
+
     Pip.removeListener("knob1", handleKnobStart);
     Pip.on("knob1", handleKnobStart);
-    
+
     clearWatch(clickWatchHandle);
     clickWatchHandle = setWatch(handleKnobStart, ENC1_PRESS, { repeat: true, edge: "rising", debounce: 50 });
   }
 
-  function handleKnobStart() {
+  function handleKnobStart(dir) {
     if (gameState === 'TITLE_SCREEN') {
       Pip.audioStart('HOLO/RADROACH_RACES/BUGLE.WAV');
       Pip.removeListener("knob1", handleKnobStart);
       startCountdown();
     } else if (gameState === 'GAMEOVER') {
-      Pip.playSound('HOLO/RADROACH_RACES/WINNER.WAV');
       showTitleScreen();
     }
   }
 
+  // ─── Countdown ────────────────────────────────────────────────────────────
+
   function startCountdown() {
     gameState = 'COUNTDOWN';
     countdownValue = 8;
-    
-    // Automatically select map index routing before launching the timer
-    currentMapId = Math.randInt(0, 4);
-    const blueprint = MAP_BLUEPRINTS[currentMapId];
-    trackWalls = blueprint.walls;
-    goalPos.x = blueprint.goal.x;
-    goalPos.y = blueprint.goal.y;
-    startX = blueprint.start.x;
-    startYBase = blueprint.start.y;
 
-    // Grid layout array positioning configuration profiles
+    currentMapId = Math.randInt(5);
+    const bp = MAP_BLUEPRINTS[currentMapId];
+    trackWalls = bp.walls;
+    goalPos.x = bp.goal.x;
+    goalPos.y = bp.goal.y;
+    startX = bp.start.x;
+    startYBase = bp.start.y;
+
+    // Initialise radroaches with DVD-bounce style velocities.
+    // vx is always positive (moving right initially), vy alternates.
+    // Speed range: 1.5 – 1.5 px/tick for lively movement.
     radroaches = [
-      { id: 1, shape: 'square',  x: startX, y: startYBase + 0,  vx: 1.0 + Math.random() * 2.2, vy: 0.8 + Math.random() * 1.5 },
-      { id: 2, shape: 'triangle',x: startX, y: startYBase + 18, vx: 1.0 + Math.random() * 2.2, vy: (Math.random() > 0.5 ? 1 : -1) * (0.8 + Math.random() * 1.5) },
-      { id: 3, shape: 'diamond', x: startX, y: startYBase + 36, vx: 1.0 + Math.random() * 2.2, vy: (Math.random() > 0.5 ? 1 : -1) * (0.8 + Math.random() * 1.5) },
-      { id: 4, shape: 'cross',   x: startX, y: startYBase + 54, vx: 1.0 + Math.random() * 2.2, vy: (Math.random() > 0.5 ? 1 : -1) * (0.8 + Math.random() * 1.5) },
-      { id: 5, shape: 'hexagon', x: startX, y: startYBase + 72, vx: 1.0 + Math.random() * 2.2, vy: (Math.random() > 0.5 ? 1 : -1) * (0.8 + Math.random() * 1.5) }
+      { id: 1, shape: 'square',   x: startX, y: startYBase,      vx:  1.5 + Math.randInt(20) * 0.1, vy:  0.8 + Math.randInt(15) * 0.1 },
+      { id: 2, shape: 'triangle', x: startX, y: startYBase + 18, vx:  1.5 + Math.randInt(20) * 0.1, vy: -(0.8 + Math.randInt(15) * 0.1) },
+      { id: 3, shape: 'diamond',  x: startX, y: startYBase + 36, vx:  1.5 + Math.randInt(20) * 0.1, vy:  0.8 + Math.randInt(15) * 0.1 },
+      { id: 4, shape: 'cross',    x: startX, y: startYBase + 54, vx:  1.5 + Math.randInt(20) * 0.1, vy: -(0.8 + Math.randInt(15) * 0.1) },
+      { id: 5, shape: 'hexagon',  x: startX, y: startYBase + 72, vx:  1.5 + Math.randInt(20) * 0.1, vy:  0.8 + Math.randInt(15) * 0.1 }
     ];
 
     if (countdownTimer) clearInterval(countdownTimer);
     countdownTimer = setInterval(tickCountdown, 1000);
-    tickCountdown(); // Primary instant invocation
+    tickCountdown();
   }
 
   function tickCountdown() {
     if (gameState !== 'COUNTDOWN') return;
 
-    h.setColor(0).fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+    h.setColor(0).fillRect(0, 0, 480, 320);
     drawTrack();
-    
-    // Draw radroaches stationary in ready positions during countdown checks
+
     h.setColor(1);
     for (let i = 0; i < radroaches.length; i++) {
       drawShape(radroaches[i]);
@@ -194,7 +231,7 @@
     if (countdownValue > 0) {
       Pip.playSound('SCROLL');
       h.setFont("Monofonto96").setFontAlign(0, 0).setColor(3);
-      h.drawString(countdownValue.toString(), SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2);
+      h.drawString(countdownValue.toString(), 240, 160);
       countdownValue--;
     } else {
       Pip.audioStart('HOLO/RADROACH_RACES/BUGLE.WAV');
@@ -207,9 +244,11 @@
     Pip.lastFlip = getTime();
   }
 
+  // ─── Drawing ──────────────────────────────────────────────────────────────
+
   function drawShape(r) {
-    const cx = r.x + BLOCK_SIZE / 2;
-    const cy = r.y + BLOCK_SIZE / 2;
+    const cx = r.x + 7;
+    const cy = r.y + 7;
 
     if (r.shape === 'square') {
       h.drawRect(r.x, r.y, r.x + BLOCK_SIZE, r.y + BLOCK_SIZE);
@@ -228,68 +267,91 @@
 
   function drawTrack() {
     h.setColor(1);
-    h.drawRect(PLAY_AREA.x1, PLAY_AREA.y1, PLAY_AREA.x2, PLAY_AREA.y2);
-    
+    h.drawRect(15, 45, 465, 295);
+
     for (let i = 0; i < trackWalls.length; i++) {
-      let w = trackWalls[i];
+      const w = trackWalls[i];
       h.drawLine(w.x1, w.y1, w.x2, w.y2);
     }
-    
-    // Draw Fruit Target Box Area Blocks
+
+    // Map label top-left
+    h.setFont("Monofonto14").setFontAlign(-1, -1).setColor(2);
+    h.drawString("Map " + (currentMapId + 1), 20, 48);
+
+    // Goal marker (bright block)
     h.setColor(3);
     h.fillRect(goalPos.x, goalPos.y, goalPos.x + goalPos.w, goalPos.y + goalPos.h);
-    
+    // Stem detail above goal
     h.setColor(2);
-    h.fillRect(goalPos.x + 12, goalPos.y - 6, goalPos.x + 18, goalPos.y); 
+    h.fillRect(goalPos.x + 12, goalPos.y - 6, goalPos.x + 18, goalPos.y);
     h.fillRect(goalPos.x - 4, goalPos.y + 10, goalPos.x, goalPos.y + 16);
   }
 
-  function checkWallCollision(r) {
-    if (r.x <= PLAY_AREA.x1) { r.x = PLAY_AREA.x1; r.vx = -r.vx; }
-    else if (r.x + BLOCK_SIZE >= PLAY_AREA.x2) { r.x = PLAY_AREA.x2 - BLOCK_SIZE; r.vx = -r.vx; }
-    if (r.y <= PLAY_AREA.y1) { r.y = PLAY_AREA.y1; r.vy = -r.vy; }
-    else if (r.y + BLOCK_SIZE >= PLAY_AREA.y2) { r.y = PLAY_AREA.y2 - BLOCK_SIZE; r.vy = -r.vy; }
+  // ─── Physics ──────────────────────────────────────────────────────────────
 
+  function checkWallCollision(r) {
+    let bounced = false;
+
+    // Play area boundary bounce
+    if (r.x <= 15) {
+      r.x = 15; r.vx = Math.abs(r.vx); bounced = true;
+    } else if (r.x + BLOCK_SIZE >= 465) {
+      r.x = 465 - BLOCK_SIZE; r.vx = -Math.abs(r.vx); bounced = true;
+    }
+    if (r.y <= 45) {
+      r.y = 45; r.vy = Math.abs(r.vy); bounced = true;
+    } else if (r.y + BLOCK_SIZE >= 295) {
+      r.y = 295 - BLOCK_SIZE; r.vy = -Math.abs(r.vy); bounced = true;
+    }
+
+    // Internal wall bounce
     for (let i = 0; i < trackWalls.length; i++) {
-      let w = trackWalls[i];
-      
-      if (r.x + BLOCK_SIZE >= Math.min(w.x1, w.x2) && r.x <= Math.max(w.x1, w.x2) &&
-          r.y + BLOCK_SIZE >= Math.min(w.y1, w.y2) && r.y <= Math.max(w.y1, w.y2)) {
-        
-        if (Math.abs(w.y2 - w.y1) < 2) { 
-          r.vy = -r.vy; 
-          r.y += r.vy;
-        } else if (Math.abs(w.x2 - w.x1) < 2) { 
-          r.vx = -r.vx; 
-          r.x += r.vx;
+      const w = trackWalls[i];
+      const wx1 = Math.min(w.x1, w.x2);
+      const wx2 = Math.max(w.x1, w.x2);
+      const wy1 = Math.min(w.y1, w.y2);
+      const wy2 = Math.max(w.y1, w.y2);
+
+      // Broad AABB overlap with a 3px thickness buffer around the line
+      if (r.x + BLOCK_SIZE >= wx1 - 3 && r.x <= wx2 + 3 &&
+          r.y + BLOCK_SIZE >= wy1 - 3 && r.y <= wy2 + 3) {
+
+        if (wy2 - wy1 < 6) {
+          // Horizontal wall — flip vy
+          r.vy = -r.vy;
+          r.y += r.vy * 2;
+          bounced = true;
+        } else if (wx2 - wx1 < 6) {
+          // Vertical wall — flip vx
+          r.vx = -r.vx;
+          r.x += r.vx * 2;
+          bounced = true;
         }
       }
     }
+
+    if (bounced) playBounceSound();
   }
 
-function updatePhysics() {
+  function updatePhysics() {  "ram";
     if (gameState !== 'RACING') return;
 
-    // Erase preceding positions to clear trail artifacts
+    // Erase previous positions
     h.setColor(0);
     for (let i = 0; i < radroaches.length; i++) {
-      h.fillRect(
-        radroaches[i].x - 2, 
-        radroaches[i].y - 2, 
-        radroaches[i].x + BLOCK_SIZE + 2, 
-        radroaches[i].y + BLOCK_SIZE + 2
-      );
+      const r = radroaches[i];
+      h.fillRect(r.x - 2, r.y - 2, r.x + BLOCK_SIZE + 2, r.y + BLOCK_SIZE + 2);
     }
-    
-    // Physics and intersection updates
+
+    // Move and check collisions
     for (let i = 0; i < radroaches.length; i++) {
-      let r = radroaches[i];
+      const r = radroaches[i];
       r.x += r.vx;
       r.y += r.vy;
-      
+
       checkWallCollision(r);
 
-      // Verify intersection parameters against broad mutfruit box profiles
+      // Goal collision
       if (r.x + BLOCK_SIZE >= goalPos.x && r.x <= goalPos.x + goalPos.w &&
           r.y + BLOCK_SIZE >= goalPos.y && r.y <= goalPos.y + goalPos.h) {
         gameState = 'GAMEOVER';
@@ -298,63 +360,55 @@ function updatePhysics() {
         break;
       }
     }
-    
+
     drawTrack();
-    
-    // Redraw all radroaches in new coordinate nodes
+
     h.setColor(1);
     for (let i = 0; i < radroaches.length; i++) {
       drawShape(radroaches[i]);
     }
-    
+
     if (gameState === 'GAMEOVER') {
       displayWinner();
     }
 
-    // Force display updates to match micro-intervals
     h.flip();
     Pip.lastFlip = getTime();
   }
 
   function displayWinner() {
-    h.setColor(1).fillRect(SCREEN_WIDTH / 2 - 120, SCREEN_HEIGHT / 2 - 30, SCREEN_WIDTH / 2 + 120, SCREEN_HEIGHT / 2 + 30);
-    h.setColor(0).drawRect(SCREEN_WIDTH / 2 - 118, SCREEN_HEIGHT / 2 - 28, SCREEN_WIDTH / 2 + 118, SCREEN_HEIGHT / 2 + 28);
-    
-    const nameStr = SHAPE_NAMES[winnerId] + " ROACH WINS!";
-    h.setFont("Monofonto16").setFontAlign(0, -1);
-    h.drawString(nameStr, SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 - 18);
-    
+    h.setColor(1).fillRect(120, 130, 360, 190);
+    h.setColor(0).drawRect(122, 132, 358, 188);
+
+    h.setFont("Monofonto16").setFontAlign(0, -1).setColor(0);
+    h.drawString(SHAPE_NAMES[winnerId] + " ROACH WINS!", 240, 142);
     h.setFont("Monofonto14");
-    h.drawString("PRESS CLICK WHEEL TO RESTART", SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 + 8);
+    h.drawString("PRESS LEFT WHEEL TO RESTART", 240, 168);
   }
+
+  // ─── Main Loop ────────────────────────────────────────────────────────────
 
   function mainLoop() {
     if (gameState === 'RACING') {
       updatePhysics();
     }
   }
-  
-  // Set default state environment
+
+  // ─── Init ─────────────────────────────────────────────────────────────────
+
   showTitleScreen();
-  mainLoopInterval = setInterval(mainLoop, 1000 / 60);
-  
-  // Return control configuration to core OS loaders
+  mainLoopInterval = setInterval(mainLoop, 33); // ~30fps
+
   return {
     id: "RADROACHRACES",
     notDefault: true,
     fullscreen: true,
     remove: function() {
-      if (mainLoopInterval) {
-        clearInterval(mainLoopInterval);
-        mainLoopInterval = null;
-      }
-      if (countdownTimer) {
-        clearInterval(countdownTimer);
-        countdownTimer = null;
-      }
+      if (mainLoopInterval) { clearInterval(mainLoopInterval); mainLoopInterval = null; }
+      if (countdownTimer)   { clearInterval(countdownTimer);   countdownTimer = null; }
       Pip.removeListener("knob1", handleKnobStart);
       clearWatch(clickWatchHandle);
       Pip.audioStop();
     }
   };
-})();
+});
