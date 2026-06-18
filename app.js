@@ -1,10 +1,17 @@
 // =============================================================================
 //  Name: Radroach Races
+//  Author: Theeohn Megistus
 //  License: CC-BY-NC-4.0
 //  Repository: https://github.com/Theeohn/Radroach-Races
 // =============================================================================
 
 (function() {
+  // Pre-bind heavily used graphics methods for tight loops (Rule 3.15 / CPU Fix)
+  const drawLineCached = h.drawLine.bind(h);
+  
+  // Pre-allocate flat typed array for dirty rectangles (20 integers max needed) to prevent per-frame allocation
+  const dirty = new Int16Array(20);
+
   let mainLoopInterval = null;
   let countdownTimer = null;
 
@@ -13,7 +20,10 @@
   let winnerId = -1;
   let countdownValue = 5;
   let currentMapId = 0;
-  let trackWalls = [];
+  
+  // trackWalls will be a flattened Int16Array instead of an array of objects
+  let trackWalls = new Int16Array(0); 
+  
   let goalPos = { x: 0, y: 0, w: 13, h: 13 };
   let startX = 0;
   let startYBase = 0;
@@ -22,114 +32,62 @@
   // Sound limiter — max 2 bounce sound instances at once
   let bounceSoundCount = 0;
 
-  // Static-layer dirty flag — set to 1 whenever the track/goal layer
-  // needs a full redraw (game start, post-countdown). During RACING the
-  // track is composited back only within each roach's dirty bounding box
-  // via h.setClipRect, so the vast majority of static pixels are never
-  // re-issued to the display.
   let trackDirty = 1;
 
   const SHAPE_NAMES = { 1: 'SQUARE', 2: 'TRIANGLE', 3: 'DIAMOND', 4: 'CROSS', 5: 'HEXAGON' };
 
-  // Per-shape geometry. "half" is the visual half-extent used when drawing
-  // (square/diamond scaled per spec; triangle/cross/hexagon keep the
-  // original 7px half-extent). "hitR" is the invisible circular hitbox
-  // radius, set to exactly reach that shape's farthest vertex — verts
-  // rest just inside the circle, never poking out.
   const SHAPES = {
-    square:   { half: 6.72, hitR: 9.51 }, // 7 * 0.96, corner = half*sqrt(2) = 9.5035
-    triangle: { half: 7,    hitR: 9.91 }, // bottom corners farthest = sqrt(7^2+7^2) = 9.8995
-    diamond:  { half: 7.28, hitR: 7.29 }, // 7 * 1.04, verts already on the radius = 7.28
-    cross:    { half: 7,    hitR: 7.63 }, // arm half-len 7, half-width 3 -> sqrt(7^2+3^2) = 7.6158
-    hexagon:  { half: 7,    hitR: 7.83 }  // top/bottom verts at q=3.5 in from corner = sqrt(3.5^2+7^2) = 7.8262
+    square:   { half: 6.72, hitR: 9.51 },
+    triangle: { half: 7,    hitR: 9.91 },
+    diamond:  { half: 7.28, hitR: 7.29 },
+    cross:    { half: 7,    hitR: 7.63 },
+    hexagon:  { half: 7,    hitR: 7.83 } 
   };
 
-  // Play area: 480x320 screen, with margin
-  // PLAY_AREA: x1=18, x2=465, y1=18, y2=298
-
-  // MAP_BLUEPRINTS derived from Horse Race Test map images.
-  // Walls are line segments (x1,y1)-(x2,y2) representing internal barriers.
-  // Outer boundary enforcement is handled by PLAY_AREA bounce logic.
-  // Start positions are from the yellow START box (top-left region of each map).
-  // Goal positions are from the checkered flag square in each map image.
-  //
-  // Map coordinate space: 480x320, play area inset x1=18, x2=465, y1=18, y2=298.
-  // Wall coordinates are scaled/mapped from each image's proportional layout.
-
   const MAP_BLUEPRINTS = [
-    // Map 1: S-shaped winding tunnel with two horizontal corridors and two vertical connectors.
-    // Start: top-left. Goal: center-right area (checkered flag near x=340, y=240 in image).
     {
       goal: { x: 375, y: 200 },
       start: { x: 30, y: 55 },
       walls: [
-        // Upper horizontal divider — splits top corridor from mid section
         { x1: 18,  y1: 155, x2: 270, y2: 155 },
-        // Lower horizontal divider — creates bottom corridor
         { x1: 200, y1: 220, x2: 465, y2: 220 },
-        // Left vertical connector — joins upper and mid dividers.
-        // Starts at y=80 (not the pen's top edge) so a 35px gap remains at the
-        // top-right corner of the start pen — wide enough for a 14px roach to escape through.
         { x1: 270, y1: 80,  x2: 270, y2: 155 },
-        // Right vertical connector — joins mid and lower dividers
         { x1: 200, y1: 155, x2: 200, y2: 285 }
       ]
     },
-    // Map 2: Large open floor with a central U-shaped funnel and a left side pocket.
-    // Start: top-left. Goal: center (checkered flag near x=270, y=215 in image).
     {
       goal: { x: 40, y: 65 },
-      start: { x: 30, y: 100 },
+      start: { x: 30, y: 120 },
       walls: [
-        // Top horizontal bar cutting upper-right off
         { x1: 18,  y1: 95,  x2: 185, y2: 95  },
-        // Vertical drop from top bar — forms left wall of funnel
         { x1: 185, y1: 95,  x2: 185, y2: 200 },
-        // Bottom of funnel — horizontal join
-        { x1: 185, y1: 200, x2: 310, y2: 200 },
-        // Left side pocket wall — partial vertical on left
-        { x1: 80,  y1: 200, x2: 80,  y2: 285 }
+        { x1: 185, y1: 200, x2: 310, y2: 200 }
       ]
     },
-    // Map 3: Jagged rocky terrain with a diagonal central obstacle and upper corridor blocker.
-    // Start: top-left. Goal: left-center (checkered flag near x=250, y=235 in image).
     {
       goal: { x: 340, y: 50 },
       start: { x: 30, y: 185 },
       walls: [
-        // Upper wall — cuts off top passage, forcing left or right routing
         { x1: 100, y1: 55,  x2: 100, y2: 170 },
-        // Mid horizontal — central barrier across map
         { x1: 100, y1: 170, x2: 310, y2: 170 },
-        // Lower right horizontal — forces lower path on right side
         { x1: 210, y1: 220, x2: 465, y2: 220 }
       ]
     },
-    // Map 4: Boxy corridors with a large hollow central rectangle (room with no exit until corners).
-    // Start: top-left. Goal: left-center pocket (checkered flag near x=65, y=215 in image).
     {
       goal: { x: 415, y: 205 },
       start: { x: 30, y: 110 },
       walls: [
-        // Top bar of central box
         { x1: 130, y1: 105, x2: 385, y2: 105 },
-        // Bottom bar of central box
         { x1: 130, y1: 245, x2: 385, y2: 245 },
-        // Left bar of central box
         { x1: 130, y1: 105, x2: 130, y2: 245 },
-        // Right bar of central box
         { x1: 385, y1: 105, x2: 385, y2: 245 }
       ]
     },
-    // Map 5: Organic blob terrain with a winding path. Two horizontal bands create level splits.
-    // Start: top-left. Goal: right-center (checkered flag near x=390, y=210 in image).
     {
       goal: { x: 42, y: 272 },
       start: { x: 30, y: 55 },
       walls: [
-        // Upper horizontal band — forces traffic to split above or below
         { x1: 18,  y1: 165, x2: 355, y2: 165 },
-        // Lower horizontal band — second level split
         { x1: 90,  y1: 240, x2: 465, y2: 240 }
       ]
     }
@@ -147,7 +105,6 @@
     h.setFont("Monofonto23").setFontAlign(0, -1).setColor(3);
     h.drawString("Radroach Races", 240, 55);
 
-    // Fence backdrop
     h.setColor(2);
     h.drawLine(55, 180, 425, 180);
     h.drawLine(55, 200, 425, 200);
@@ -155,13 +112,11 @@
       h.fillRect(fx, 150, fx + 15, 230);
     }
 
-    // Grass tufts
     for (let gx = 35; gx < 445; gx += 12) {
       h.drawLine(gx, 230, gx - 4, 210);
       h.drawLine(gx + 3, 230, gx + 6, 205);
     }
 
-    // Cockroach vector art
     h.setColor(3);
     h.fillEllipse(200, 165, 280, 215);
     h.fillCircle(240, 150, 18);
@@ -199,23 +154,35 @@
 
     currentMapId = Math.randInt(5);
     const bp = MAP_BLUEPRINTS[currentMapId];
-    trackWalls = bp.walls;
+    const bpWalls = bp.walls;
+    
+    // Flatten trackWalls and pre-calculate bounding boxes
+    trackWalls = new Int16Array(bpWalls.length * 8); 
+    for (let i = 0; i < bpWalls.length; i++) {
+      let idx = i * 8;
+      let w = bpWalls[i];
+      trackWalls[idx] = w.x1;
+      trackWalls[idx+1] = w.y1;
+      trackWalls[idx+2] = w.x2;
+      trackWalls[idx+3] = w.y2;
+      trackWalls[idx+4] = Math.min(w.x1, w.x2);
+      trackWalls[idx+5] = Math.min(w.y1, w.y2);
+      trackWalls[idx+6] = Math.max(w.x1, w.x2);
+      trackWalls[idx+7] = Math.max(w.y1, w.y2);
+    }
+    
     goalPos.x = bp.goal.x;
     goalPos.y = bp.goal.y;
     startX = bp.start.x;
     startYBase = bp.start.y;
 
-    // Initialise radroaches DVD-logo style: each gets its own random angle,
-    // so every roach heads off in a near-random direction from the start.
-    // Speed magnitude stays constant (3 px/tick); only the angle varies.
-    // Position is tracked as a center point (cx, cy) since every hitbox
-    // is now a circle drawn around that center.
+    // Cache hitR directly onto the roach objects
     radroaches = [
-      { id: 1, shape: 'square',   cx: startX + 7, cy: startYBase + 7,      vx: 0, vy: 0 },
-      { id: 2, shape: 'triangle', cx: startX + 7, cy: startYBase + 7 + 18, vx: 0, vy: 0 },
-      { id: 3, shape: 'diamond',  cx: startX + 7, cy: startYBase + 7 + 36, vx: 0, vy: 0 },
-      { id: 4, shape: 'cross',    cx: startX + 7, cy: startYBase + 7 + 54, vx: 0, vy: 0 },
-      { id: 5, shape: 'hexagon',  cx: startX + 7, cy: startYBase + 7 + 72, vx: 0, vy: 0 }
+      { id: 1, shape: 'square',   cx: startX + 7, cy: startYBase + 7,      vx: 0, vy: 0, hitR: SHAPES.square.hitR },
+      { id: 2, shape: 'triangle', cx: startX + 7, cy: startYBase + 7 + 18, vx: 0, vy: 0, hitR: SHAPES.triangle.hitR },
+      { id: 3, shape: 'diamond',  cx: startX + 7, cy: startYBase + 7 + 36, vx: 0, vy: 0, hitR: SHAPES.diamond.hitR },
+      { id: 4, shape: 'cross',    cx: startX + 7, cy: startYBase + 7 + 54, vx: 0, vy: 0, hitR: SHAPES.cross.hitR },
+      { id: 5, shape: 'hexagon',  cx: startX + 7, cy: startYBase + 7 + 72, vx: 0, vy: 0, hitR: SHAPES.hexagon.hitR }
     ];
     for (let i = 0; i < radroaches.length; i++) {
       setRandomVelocity(radroaches[i], 3);
@@ -244,7 +211,7 @@
       clearInterval(countdownTimer);
       countdownTimer = null;
       gameState = 'RACING';
-      trackDirty = 1; // force full static layer draw on first racing frame
+      trackDirty = 1; 
     }
 
     h.flip();
@@ -253,12 +220,6 @@
 
   // ─── Drawing ──────────────────────────────────────────────────────────────
 
-  // Each roach is drawn with a double-stroke outline — the same silhouette
-  // traced twice, the second pass inset by 1px — so the line reads as
-  // roughly 2px thick instead of a single hairline, plus the brightest
-  // palette color (3) instead of the track's color (1) so roaches stand
-  // out clearly against the track/walls. Size and fill are unchanged —
-  // only stroke weight and color increase visibility.
   function drawShape(r) {
     const s = SHAPES[r.shape], cx = r.cx, cy = r.cy, hf = s.half, hf2 = hf - 1;
     h.setColor(3);
@@ -294,32 +255,21 @@
   }
 
   function drawTrack() {
-  h.setColor(3);
-  
-  // Double the boundary thickness by drawing two concentric rectangles
-  h.drawRect(18, 18, 465, 298);
-  h.drawRect(19, 19, 464, 297);
+    h.setColor(3);
+    h.drawRect(18, 18, 465, 298);
+    h.drawRect(19, 19, 464, 297);
 
-  // Method binding optimization for tight loops (Rule 3.15)
-  let line = h.drawLine.bind(h);
-  
-  // High-performance loop structure (Rule 3.20 / 3.21)
-  for (let i = 0; i < trackWalls.length; i++) {
-    // Avoid allocating an object variable block inside the loop (Rule S05)
-    // Draw base line
-    line(trackWalls[i].x1, trackWalls[i].y1, trackWalls[i].x2, trackWalls[i].y2);
-    // Draw offset line to double thickness
-    line(trackWalls[i].x1, trackWalls[i].y1 + 1, trackWalls[i].x2, trackWalls[i].y2 + 1);
-  }
+    // Read directly from flattened TypedArray using cached drawLine
+    for (let i = 0; i < trackWalls.length; i += 8) {
+      drawLineCached(trackWalls[i], trackWalls[i+1], trackWalls[i+2], trackWalls[i+3]);
+      drawLineCached(trackWalls[i], trackWalls[i+1] + 1, trackWalls[i+2], trackWalls[i+3] + 1);
+    }
 
-    // Map label top-left
     h.setFont("Monofonto14").setFontAlign(-1, -1).setColor(2);
-    h.drawString("Map " + (currentMapId + 1), 21, 21);
+    h.drawString("Map " + (currentMapId + 1), 25, 25);
 
-    // Goal marker (bright block, same footprint as a radroach)
     h.setColor(3);
     h.fillRect(goalPos.x, goalPos.y, goalPos.x + goalPos.w, goalPos.y + goalPos.h);
-    // Stem detail above goal (scaled to 13px goal)
     h.setColor(2);
     h.fillRect(goalPos.x + 4, goalPos.y - 6, goalPos.x + 9, goalPos.y);
     h.fillRect(goalPos.x - 4, goalPos.y + 4, goalPos.x, goalPos.y + 9);
@@ -327,22 +277,13 @@
 
   // ─── Physics ──────────────────────────────────────────────────────────────
 
-  // Set a roach's velocity to a random angle at the given speed magnitude.
-  // Used both for the initial DVD-logo-style launch and for the small
-  // randomised kick applied after every bounce.
   function setRandomVelocity(r, speed) {
-    // Random angle in [0, 2*PI). Math.randInt(360) gives a degree value,
-    // converted to radians — avoids floating point random() per the no-Math.random rule.
     const deg = Math.randInt(360);
     const rad = deg * 0.017453292519943295;
     r.vx = Math.cos(rad) * speed;
     r.vy = Math.sin(rad) * speed;
   }
 
-  // Nudge an existing velocity vector by a random angle (±40°) while
-  // preserving its speed — keeps the DVD-logo "near random, not truly random"
-  // bounce: a real reflection, with a touch of unpredictability so paths
-  // never repeat the exact same loop.
   function jitterVelocity(r) {
     const speed = Math.sqrt(r.vx * r.vx + r.vy * r.vy);
     const curAngle = Math.atan2(r.vy, r.vx);
@@ -354,9 +295,8 @@
 
   function checkWallCollision(r) {  "ram";
     let bounced = false;
-    const hr = SHAPES[r.shape].hitR;
+    const hr = r.hitR; 
 
-    // Play area boundary bounce — circle vs the four play-area edges
     if (r.cx - hr <= 18) {
       r.cx = 18 + hr; r.vx = Math.abs(r.vx); bounced = true;
     } else if (r.cx + hr >= 465) {
@@ -368,26 +308,21 @@
       r.cy = 298 - hr; r.vy = -Math.abs(r.vy); bounced = true;
     }
 
-    // Internal wall bounce — walls are axis-aligned segments, so treat
-    // each as a thick band of half-width = hitbox radius around the line.
-    for (let i = 0; i < trackWalls.length; i++) {
-      const w = trackWalls[i];
-      const wx1 = Math.min(w.x1, w.x2);
-      const wx2 = Math.max(w.x1, w.x2);
-      const wy1 = Math.min(w.y1, w.y2);
-      const wy2 = Math.max(w.y1, w.y2);
+    // Checking the flattened Int16Array
+    for (let i = 0; i < trackWalls.length; i += 8) {
+      const wx1 = trackWalls[i+4]; // minX
+      const wy1 = trackWalls[i+5]; // minY
+      const wx2 = trackWalls[i+6]; // maxX
+      const wy2 = trackWalls[i+7]; // maxY
 
-      // Broad overlap check using the roach's own hitbox radius as buffer
       if (r.cx + hr >= wx1 - hr && r.cx - hr <= wx2 + hr &&
           r.cy + hr >= wy1 - hr && r.cy - hr <= wy2 + hr) {
 
         if (wy2 - wy1 < 6) {
-          // Horizontal wall — flip vy
           r.vy = -r.vy;
           r.cy += r.vy * 2;
           bounced = true;
         } else if (wx2 - wx1 < 6) {
-          // Vertical wall — flip vx
           r.vx = -r.vx;
           r.cx += r.vx * 2;
           bounced = true;
@@ -400,26 +335,12 @@
     }
   }
 
-  // Roach-vs-roach collision: circle-vs-circle, DVD-logo style.
-  // Only fires when roaches are actively approaching each other (relVel < 0).
-  // This approach-check prevents re-triggering on pairs that are already
-  // separating, eliminating the magnetizing/orbiting bug.
-  //
-  // Collision response: swap the normal-axis velocity components between the
-  // two roaches (elastic equal-mass exchange), then immediately renormalize
-  // each roach back to exactly speed 3 (px/tick).
-  //
-  // WHY renormalize: the swap changes each roach's normal component to the
-  // other's value. Unless both happen to have equal normal-component magnitude
-  // (rare), the resulting total speed differs from 3 — one roach gets faster,
-  // one slower. Renormalizing after the swap locks speed back to 3, keeping
-  // the new deflection direction while preventing any speed bleed between roaches.
   function checkRoachCollisions() {  "ram";
     for (let i = 0; i < radroaches.length; i++) {
       for (let j = i + 1; j < radroaches.length; j++) {
         const a = radroaches[i];
         const b = radroaches[j];
-        const rSum = SHAPES[a.shape].hitR + SHAPES[b.shape].hitR;
+        const rSum = a.hitR + b.hitR;
 
         const dx = a.cx - b.cx;
         const dy = a.cy - b.cy;
@@ -427,26 +348,20 @@
 
         if (distSq < rSum * rSum && distSq > 0) {
           const dist = Math.sqrt(distSq);
-          // Unit collision normal, pointing from b toward a
           const nx = dx / dist, ny = dy / dist;
 
-          // Separate so circles no longer overlap — split evenly.
           const overlap = rSum - dist;
           a.cx += nx * overlap * 0.5; a.cy += ny * overlap * 0.5;
           b.cx -= nx * overlap * 0.5; b.cy -= ny * overlap * 0.5;
 
-          // Approach check: only resolve if moving toward each other.
           const relVel = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
-          if (relVel >= 0) continue; // already separating — skip
+          if (relVel >= 0) continue; 
 
-          // Swap normal-axis velocity components (elastic equal-mass exchange).
           const aDot = a.vx * nx + a.vy * ny;
           const bDot = b.vx * nx + b.vy * ny;
           a.vx += (bDot - aDot) * nx; a.vy += (bDot - aDot) * ny;
           b.vx += (aDot - bDot) * nx; b.vy += (aDot - bDot) * ny;
 
-          // Renormalize both roaches to exactly speed 3 so the swap never
-          // bleeds speed between roaches. Rescale vx/vy to the fixed constant.
           let sMag = Math.sqrt(a.vx * a.vx + a.vy * a.vy);
           if (sMag > 0) { a.vx = a.vx / sMag * 3; a.vy = a.vy / sMag * 3; }
           sMag = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
@@ -459,8 +374,6 @@
   function updatePhysics() {  "ram";
     if (gameState !== 'RACING') return;
 
-    // On the first racing frame (or after a full clear), paint the entire
-    // static layer once and skip the per-roach clip-repair below.
     if (trackDirty) {
       trackDirty = 0;
       h.setColor(0).fillRect(0, 0, 480, 320);
@@ -471,22 +384,23 @@
       return;
     }
 
-    // --- Erase previous roach positions (black fill over each dirty rect) ---
-    // Save dirty bounding boxes so we can clip-repaint the track under them.
-    // Reuse a small fixed-length flat array to avoid object allocation per frame.
-    // Layout: [x1_0, y1_0, x2_0, y2_0,  x1_1, y1_1, x2_1, y2_1, ...]
-    let dirty = [];
+    let dIdx = 0;
     h.setColor(0);
     for (let i = 0; i < radroaches.length; i++) {
       const r = radroaches[i];
-      const hr = SHAPES[r.shape].hitR;
+      const hr = r.hitR; 
       const dx1 = r.cx - hr - 2, dy1 = r.cy - hr - 2;
       const dx2 = r.cx + hr + 2, dy2 = r.cy + hr + 2;
+      
       h.fillRect(dx1, dy1, dx2, dy2);
-      dirty.push(dx1, dy1, dx2, dy2);
+      
+      // Save directly into the pre-allocated Int16Array
+      dirty[dIdx++] = dx1;
+      dirty[dIdx++] = dy1;
+      dirty[dIdx++] = dx2;
+      dirty[dIdx++] = dy2;
     }
 
-    // --- Move roaches and resolve collisions ---
     for (let i = 0; i < radroaches.length; i++) {
       const r = radroaches[i];
       r.cx += r.vx;
@@ -495,20 +409,16 @@
     }
     checkRoachCollisions();
 
-    // --- Repaint static track pixels only within each dirty rect ---
-    // h.setClipRect restricts all drawing to the given bounding box, so
-    // drawTrack() issues the same draw calls but only pixels inside the
-    // clip region are written — cheap for small roach-sized regions.
-    for (let i = 0; i < dirty.length; i += 4) {
+    // Loop through the fixed 20 entries (5 roaches * 4 rect values)
+    for (let i = 0; i < 20; i += 4) {
       h.setClipRect(dirty[i], dirty[i+1], dirty[i+2], dirty[i+3]);
       drawTrack();
-      h.setClipRect(0, 0, 480, 320); // reset clip
+      h.setClipRect(0, 0, 480, 320); 
     }
 
-    // --- Goal collision check ---
     for (let i = 0; i < radroaches.length; i++) {
       const r = radroaches[i];
-      const hr = SHAPES[r.shape].hitR;
+      const hr = r.hitR;
       if (r.cx + hr >= goalPos.x && r.cx - hr <= goalPos.x + goalPos.w &&
           r.cy + hr >= goalPos.y && r.cy - hr <= goalPos.y + goalPos.h) {
         gameState = 'GAMEOVER';
@@ -518,7 +428,6 @@
       }
     }
 
-    // --- Draw roaches at new positions ---
     for (let i = 0; i < radroaches.length; i++) {
       drawShape(radroaches[i]);
     }
