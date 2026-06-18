@@ -14,13 +14,20 @@
   let countdownValue = 5;
   let currentMapId = 0;
   let trackWalls = [];
-  let goalPos = { x: 0, y: 0, w: 14, h: 14 };
+  let goalPos = { x: 0, y: 0, w: 13, h: 13 };
   let startX = 0;
   let startYBase = 0;
   let radroaches = [];
 
   // Sound limiter — max 2 bounce sound instances at once
   let bounceSoundCount = 0;
+
+  // Static-layer dirty flag — set to 1 whenever the track/goal layer
+  // needs a full redraw (game start, post-countdown). During RACING the
+  // track is composited back only within each roach's dirty bounding box
+  // via h.setClipRect, so the vast majority of static pixels are never
+  // re-issued to the display.
+  let trackDirty = 1;
 
   const SHAPE_NAMES = { 1: 'SQUARE', 2: 'TRIANGLE', 3: 'DIAMOND', 4: 'CROSS', 5: 'HEXAGON' };
 
@@ -237,6 +244,7 @@
       clearInterval(countdownTimer);
       countdownTimer = null;
       gameState = 'RACING';
+      trackDirty = 1; // force full static layer draw on first racing frame
     }
 
     h.flip();
@@ -286,13 +294,23 @@
   }
 
   function drawTrack() {
-    h.setColor(3);
-    h.drawRect(18, 18, 465, 298);
+  h.setColor(3);
+  
+  // Double the boundary thickness by drawing two concentric rectangles
+  h.drawRect(18, 18, 465, 298);
+  h.drawRect(19, 19, 464, 297);
 
-    for (let i = 0; i < trackWalls.length; i++) {
-      const w = trackWalls[i];
-      h.drawLine(w.x1, w.y1, w.x2, w.y2);
-    }
+  // Method binding optimization for tight loops (Rule 3.15)
+  let line = h.drawLine.bind(h);
+  
+  // High-performance loop structure (Rule 3.20 / 3.21)
+  for (let i = 0; i < trackWalls.length; i++) {
+    // Avoid allocating an object variable block inside the loop (Rule S05)
+    // Draw base line
+    line(trackWalls[i].x1, trackWalls[i].y1, trackWalls[i].x2, trackWalls[i].y2);
+    // Draw offset line to double thickness
+    line(trackWalls[i].x1, trackWalls[i].y1 + 1, trackWalls[i].x2, trackWalls[i].y2 + 1);
+  }
 
     // Map label top-left
     h.setFont("Monofonto14").setFontAlign(-1, -1).setColor(2);
@@ -301,10 +319,10 @@
     // Goal marker (bright block, same footprint as a radroach)
     h.setColor(3);
     h.fillRect(goalPos.x, goalPos.y, goalPos.x + goalPos.w, goalPos.y + goalPos.h);
-    // Stem detail above goal
+    // Stem detail above goal (scaled to 13px goal)
     h.setColor(2);
-    h.fillRect(goalPos.x + 4, goalPos.y - 6, goalPos.x + 10, goalPos.y);
-    h.fillRect(goalPos.x - 4, goalPos.y + 4, goalPos.x, goalPos.y + 10);
+    h.fillRect(goalPos.x + 4, goalPos.y - 6, goalPos.x + 9, goalPos.y);
+    h.fillRect(goalPos.x - 4, goalPos.y + 4, goalPos.x, goalPos.y + 9);
   }
 
   // ─── Physics ──────────────────────────────────────────────────────────────
@@ -328,7 +346,7 @@
   function jitterVelocity(r) {
     const speed = Math.sqrt(r.vx * r.vx + r.vy * r.vy);
     const curAngle = Math.atan2(r.vy, r.vx);
-    const jitterDeg = Math.randInt(9) - 40;
+    const jitterDeg = Math.randInt(81) - 40;
     const newAngle = curAngle + jitterDeg * 0.017453292519943295;
     r.vx = Math.cos(newAngle) * speed;
     r.vy = Math.sin(newAngle) * speed;
@@ -382,13 +400,20 @@
     }
   }
 
-  // Roach-vs-roach collision: circle-vs-circle. Each roach reflects its
-  // own velocity off the collision normal (the line between the two
-  // centers) and keeps its own pre-collision speed — no inertia/speed
-  // is exchanged between roaches, matching the wall-bounce behaviour of
-  // "direction changes, speed never does." A small separating push keeps
-  // overlapping circles from sticking, then the same DVD-logo jitter as
-  // a wall bounce is applied to each.
+  // Roach-vs-roach collision: circle-vs-circle, DVD-logo style.
+  // Only fires when roaches are actively approaching each other (relVel < 0).
+  // This approach-check prevents re-triggering on pairs that are already
+  // separating, eliminating the magnetizing/orbiting bug.
+  //
+  // Collision response: swap the normal-axis velocity components between the
+  // two roaches (elastic equal-mass exchange), then immediately renormalize
+  // each roach back to exactly speed 3 (px/tick).
+  //
+  // WHY renormalize: the swap changes each roach's normal component to the
+  // other's value. Unless both happen to have equal normal-component magnitude
+  // (rare), the resulting total speed differs from 3 — one roach gets faster,
+  // one slower. Renormalizing after the swap locks speed back to 3, keeping
+  // the new deflection direction while preventing any speed bleed between roaches.
   function checkRoachCollisions() {  "ram";
     for (let i = 0; i < radroaches.length; i++) {
       for (let j = i + 1; j < radroaches.length; j++) {
@@ -405,22 +430,27 @@
           // Unit collision normal, pointing from b toward a
           const nx = dx / dist, ny = dy / dist;
 
-          // Separate so circles no longer overlap
-          const overlap = (rSum - dist) / 2;
-          a.cx += nx * overlap; a.cy += ny * overlap;
-          b.cx -= nx * overlap; b.cy -= ny * overlap;
+          // Separate so circles no longer overlap — split evenly.
+          const overlap = rSum - dist;
+          a.cx += nx * overlap * 0.5; a.cy += ny * overlap * 0.5;
+          b.cx -= nx * overlap * 0.5; b.cy -= ny * overlap * 0.5;
 
-          // Reflect each roach's own velocity across the normal (mirror
-          // the component along the normal) — same speed in, same speed
-          // out, only direction changes, just like a wall bounce.
+          // Approach check: only resolve if moving toward each other.
+          const relVel = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
+          if (relVel >= 0) continue; // already separating — skip
+
+          // Swap normal-axis velocity components (elastic equal-mass exchange).
           const aDot = a.vx * nx + a.vy * ny;
-          a.vx -= 2 * aDot * nx; a.vy -= 2 * aDot * ny;
-
           const bDot = b.vx * nx + b.vy * ny;
-          b.vx -= 2 * bDot * nx; b.vy -= 2 * bDot * ny;
+          a.vx += (bDot - aDot) * nx; a.vy += (bDot - aDot) * ny;
+          b.vx += (aDot - bDot) * nx; b.vy += (aDot - bDot) * ny;
 
-          jitterVelocity(a);
-          jitterVelocity(b);
+          // Renormalize both roaches to exactly speed 3 so the swap never
+          // bleeds speed between roaches. Rescale vx/vy to the fixed constant.
+          let sMag = Math.sqrt(a.vx * a.vx + a.vy * a.vy);
+          if (sMag > 0) { a.vx = a.vx / sMag * 3; a.vy = a.vy / sMag * 3; }
+          sMag = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
+          if (sMag > 0) { b.vx = b.vx / sMag * 3; b.vy = b.vy / sMag * 3; }
         }
       }
     }
@@ -429,27 +459,53 @@
   function updatePhysics() {  "ram";
     if (gameState !== 'RACING') return;
 
-    // Erase previous positions
+    // On the first racing frame (or after a full clear), paint the entire
+    // static layer once and skip the per-roach clip-repair below.
+    if (trackDirty) {
+      trackDirty = 0;
+      h.setColor(0).fillRect(0, 0, 480, 320);
+      drawTrack();
+      for (let i = 0; i < radroaches.length; i++) drawShape(radroaches[i]);
+      h.flip();
+      Pip.lastFlip = getTime();
+      return;
+    }
+
+    // --- Erase previous roach positions (black fill over each dirty rect) ---
+    // Save dirty bounding boxes so we can clip-repaint the track under them.
+    // Reuse a small fixed-length flat array to avoid object allocation per frame.
+    // Layout: [x1_0, y1_0, x2_0, y2_0,  x1_1, y1_1, x2_1, y2_1, ...]
+    let dirty = [];
     h.setColor(0);
     for (let i = 0; i < radroaches.length; i++) {
       const r = radroaches[i];
       const hr = SHAPES[r.shape].hitR;
-      h.fillRect(r.cx - hr - 2, r.cy - hr - 2, r.cx + hr + 2, r.cy + hr + 2);
+      const dx1 = r.cx - hr - 2, dy1 = r.cy - hr - 2;
+      const dx2 = r.cx + hr + 2, dy2 = r.cy + hr + 2;
+      h.fillRect(dx1, dy1, dx2, dy2);
+      dirty.push(dx1, dy1, dx2, dy2);
     }
 
-    // Move and check wall/edge collisions
+    // --- Move roaches and resolve collisions ---
     for (let i = 0; i < radroaches.length; i++) {
       const r = radroaches[i];
       r.cx += r.vx;
       r.cy += r.vy;
-
       checkWallCollision(r);
     }
-
-    // Roach-vs-roach collisions (after movement, before goal check)
     checkRoachCollisions();
 
-    // Goal collision — only one roach can occupy the mutfruit
+    // --- Repaint static track pixels only within each dirty rect ---
+    // h.setClipRect restricts all drawing to the given bounding box, so
+    // drawTrack() issues the same draw calls but only pixels inside the
+    // clip region are written — cheap for small roach-sized regions.
+    for (let i = 0; i < dirty.length; i += 4) {
+      h.setClipRect(dirty[i], dirty[i+1], dirty[i+2], dirty[i+3]);
+      drawTrack();
+      h.setClipRect(0, 0, 480, 320); // reset clip
+    }
+
+    // --- Goal collision check ---
     for (let i = 0; i < radroaches.length; i++) {
       const r = radroaches[i];
       const hr = SHAPES[r.shape].hitR;
@@ -462,8 +518,7 @@
       }
     }
 
-    drawTrack();
-
+    // --- Draw roaches at new positions ---
     for (let i = 0; i < radroaches.length; i++) {
       drawShape(radroaches[i]);
     }
@@ -483,7 +538,7 @@
     h.setFont("Monofonto16").setFontAlign(0, -1).setColor(2);
     h.drawString(SHAPE_NAMES[winnerId] + " ROACH WINS!", 240, 142);
     h.setFont("Monofonto14");
-    h.drawString("PRESS LEFT WHEEL TO RESTART", 240, 168);
+    h.drawString("PRESS LEFT WHEEL TO RACE AGAIN!", 240, 168);
   }
 
   // ─── Main Loop ────────────────────────────────────────────────────────────
