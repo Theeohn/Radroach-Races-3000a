@@ -117,7 +117,7 @@
     // Map 5: Organic blob terrain with a winding path. Two horizontal bands create level splits.
     // Start: top-left. Goal: right-center (checkered flag near x=390, y=210 in image).
     {
-      goal: { x: 42, y: 300 },
+      goal: { x: 42, y: 272 },
       start: { x: 30, y: 55 },
       walls: [
         // Upper horizontal band — forces traffic to split above or below
