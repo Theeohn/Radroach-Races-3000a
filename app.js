@@ -6,10 +6,8 @@
 // =============================================================================
 
 (function() {
-  // Pre-bind heavily used graphics methods for tight loops (Rule 3.15 / CPU Fix)
   const drawLineCached = h.drawLine.bind(h);
-  
-  // Pre-allocate flat typed array for dirty rectangles (20 integers max needed) to prevent per-frame allocation
+
   const dirty = new Int16Array(20);
 
   let mainLoopInterval = null;
@@ -20,94 +18,96 @@
   let winnerId = -1;
   let countdownValue = 5;
   let currentMapId = 0;
-  
-  // trackWalls will be a flattened Int16Array instead of an array of objects
-  let trackWalls = new Int16Array(0); 
-  
-  let goalPos = { x: 0, y: 0, w: 16, h: 16, hitW: 15, hitH: 15 };
+
+  let trackWalls = new Int16Array(0);
+
+  let goalPos = { x: 0, y: 0, w: 18, h: 18, hitW: 17, hitH: 17 };
   let startX = 0;
   let startYBase = 0;
   let radroaches = [];
 
   let trackDirty = 1;
 
-  const SHAPE_NAMES = { 1: 'SQUARE', 2: 'TRIANGLE', 3: 'DIAMOND', 4: 'CROSS', 5: 'HEXAGON' };
+  const SHAPE_NAMES = { 1: 'SQUARE', 2: 'TRIANGLE', 3: 'DIAMOND', 4: 'PENTAGON', 5: 'HEXAGON' };
 
   const SHAPES = {
-    square:   { half: 7.48, hitR: 9.6  },
-    triangle: { half: 9.7, hitR: 9.9  },
-    diamond:  { half: 8.57, hitR: 9.9  },
-    cross:    { half: 7.92, hitR: 9.9  },
-    hexagon:  { half: 7.92, hitR: 9.9  } 
+    square:   { half: 8.6,   hitR: 11.0 },
+    triangle: { half: 11.15, hitR: 11.4 },
+    diamond:  { half: 9.86,  hitR: 11.4 },
+    pentagon: { half: 9.78,  hitR: 11.4 },
+    hexagon:  { half: 9.11,  hitR: 11.4 }
   };
 
-  const MAP_BLUEPRINTS = [
-    { // Map 1
-      goal: { x: 42, y: 58 },
-      start: { x: 25, y: 150 },
-      walls: [
-        { x1: 18,  y1: 95,  x2: 185, y2: 95 },
-        { x1: 185, y1: 95,  x2: 185, y2: 200 },
-        { x1: 185, y1: 200, x2: 310, y2: 200 },
-        { x1: 320, y1: 18,  x2: 320, y2: 85 }
-      ]
-    },
-    { // Map 2
-      goal: { x: 340, y: 50 },
-      start: { x: 30, y: 185 },
-      walls: [
-        { x1: 100, y1: 60,  x2: 100, y2: 170 },
-        { x1: 100, y1: 135, x2: 310, y2: 135 },
-        { x1: 210, y1: 220, x2: 465, y2: 220 }
-      ]
-    },
-    { // Map 3
-      goal: { x: 375, y: 200 },
-      start: { x: 30, y: 46 },
-      walls: [
-        { x1: 18,  y1: 155, x2: 270, y2: 155 },
-        { x1: 200, y1: 220, x2: 465, y2: 220 },
-        { x1: 270, y1: 95,  x2: 270, y2: 155 },
-        { x1: 200, y1: 155, x2: 200, y2: 298 }
-      ]
-    },
-    { // Map 4
-      goal: { x: 62, y: 145 },
-      start: { x: 63, y: 25 },
-      walls: [
-        { x1: 18, y1: 125, x2: 360, y2: 125 },
-        { x1: 115, y1: 205, x2: 360, y2: 205 },
-        { x1: 115, y1: 125, x2: 115, y2: 205 },
-        { x1: 360, y1: 125, x2: 360, y2: 205 }
-      ]
-    },
-    { // Map 5
-      goal: { x: 135, y: 31 },
-      start: { x: 30, y: 192 },
-      walls: [
-        { x1: 18,  y1: 180, x2: 285, y2: 180 },
-        { x1: 320, y1: 180, x2: 285, y2: 80 },
-        { x1: 120, y1: 80, x2: 320, y2: 80 },
-        { x1: 120, y1: 18, x2: 120, y2: 80 },
-        { x1: 380, y1: 100, x2: 465, y2: 100 },
-        { x1: 380, y1: 100, x2: 380, y2: 298 },
-        { x1: 355, y1: 18, x2: 355, y2: 56}
-      ]
-    },
-    { // Map 6
-      goal: { x: 75, y: 250 },
-      start: { x: 63, y: 27 },
-      walls: [
-        { x1: 18,  y1: 128, x2: 165, y2: 128 },
-        { x1: 196,  y1: 128, x2: 323, y2: 128 },
-        { x1: 323, y1: 128, x2: 323, y2: 90 },
-        { x1: 100, y1: 180, x2: 205, y2: 180 },
-        { x1: 255, y1: 180, x2: 465, y2: 180 },
-        { x1: 319, y1: 180, x2: 319, y2: 264 },
-        { x1: 18,  y1: 229, x2: 180, y2: 229 }
-      ]
-    },
-  ];
+  // ─── Map Data ─────────────────────────────────────────────────────────────
+  //
+  // Format per map entry in MAP_DATA:
+  //   index+0 : goalX
+  //   index+1 : goalY
+  //   index+2 : startX
+  //   index+3 : startY
+  //   index+4 : wallCount  (number of walls)
+  //   index+5 .. index+4+wallCount*4 : wall entries (x1,y1,x2,y2 each)
+
+  const MAP_DATA = new Int16Array([
+    // Map 1
+    420, 205, 25, 90,  0,
+
+    // Map 2
+    42, 58, 30, 130,  4,
+    18, 95, 185, 95,
+    185, 95, 185, 200,
+    185, 200, 310, 200,
+    320, 18, 320, 85,
+
+    // Map 3
+    340, 50, 30, 185,  3,
+    100, 60, 100, 170,
+    100, 135, 310, 135,
+    210, 220, 465, 220,
+
+    // Map 4
+    375, 192, 30, 45,  4,
+    18, 155, 270, 155,
+    200, 220, 465, 220,
+    270, 95, 270, 155,
+    200, 155, 200, 298,
+
+    // Map 5
+    60, 145, 63, 25,  4,
+    18, 130, 365, 130,
+    115, 205, 365, 205,
+    115, 130, 115, 205,
+    365, 130, 365, 205,
+
+    // Map 6
+    135, 31, 28, 190,  7,
+    18, 180, 285, 180,
+    285, 180, 285, 80,
+    120, 80, 285, 80,
+    120, 18, 120, 80,
+    380, 100, 465, 100,
+    380, 100, 380, 298,
+    346, 18, 346, 56,
+
+    // Map 7
+    75, 250, 63, 30,  7,
+    18, 136, 165, 136,
+    218, 128, 323, 128,
+    323, 128, 323, 90,
+    100, 180, 205, 180,
+    319, 220, 319, 298,
+    18, 229, 180, 229
+  ]);
+
+  // Pre-compute the starting index in MAP_DATA for each map.
+  const MAP_OFFSETS = new Int16Array(7);
+  (function() {
+    let pos = 0;
+    for (let m = 0; m < 7; m++) {
+      MAP_OFFSETS[m] = pos;
+      pos += 5 + MAP_DATA[pos + 4] * 4;
+    }
+  })();
 
   // ─── Title Screen ─────────────────────────────────────────────────────────
 
@@ -168,33 +168,27 @@
     gameState = 'COUNTDOWN';
     countdownValue = 5;
 
-    // Dynamically uses MAP_BLUEPRINTS.length so you can add more maps easily!
-    currentMapId = Math.randInt(MAP_BLUEPRINTS.length);
-    const bp = MAP_BLUEPRINTS[currentMapId];
-    const bpWalls = bp.walls;
+    currentMapId = Math.randInt(7);
+    const base = MAP_OFFSETS[currentMapId];
+    const wallCount = MAP_DATA[base + 4];
 
-    trackWalls = new Int16Array(bpWalls.length * 8); 
-    for (let i = 0; i < bpWalls.length; i++) {
-      let idx = i * 8;
-      let w = bpWalls[i];
-      trackWalls[idx] = w.x1;
-      trackWalls[idx+1] = w.y1;
-      trackWalls[idx+2] = w.x2;
-      trackWalls[idx+3] = w.y2;
-      trackWalls[idx+4] = Math.min(w.x1, w.x2);
-      trackWalls[idx+5] = Math.min(w.y1, w.y2);
-      trackWalls[idx+6] = Math.max(w.x1, w.x2);
-      trackWalls[idx+7] = Math.max(w.y1, w.y2);
+    trackWalls = new Int16Array(wallCount * 4);
+    for (let i = 0; i < wallCount; i++) {
+      const src = base + 5 + i * 4;
+      const dst = i * 4;
+      trackWalls[dst]   = MAP_DATA[src];
+      trackWalls[dst+1] = MAP_DATA[src+1];
+      trackWalls[dst+2] = MAP_DATA[src+2];
+      trackWalls[dst+3] = MAP_DATA[src+3];
     }
-    
-    goalPos.x = bp.goal.x;
-    goalPos.y = bp.goal.y;
-    startX = bp.start.x;
-    startYBase = bp.start.y;
 
-    // Cache hitR directly onto the roach objects
+    goalPos.x  = MAP_DATA[base];
+    goalPos.y  = MAP_DATA[base + 1];
+    startX     = MAP_DATA[base + 2];
+    startYBase = MAP_DATA[base + 3];
+
     // Shuffle spawn slots so roach order varies each race
-    const slots = [0, 20, 40, 60, 80];
+    const slots = [0, 21, 42, 63, 84];
     for (let s = 4; s > 0; s--) {
       const sv = Math.randInt(s + 1);
       const tmp = slots[s]; slots[s] = slots[sv]; slots[sv] = tmp;
@@ -203,7 +197,7 @@
       { id: 1, shape: 'square',   cx: startX + 7, cy: startYBase + 7 + slots[0], vx: 0, vy: 0, hitR: SHAPES.square.hitR },
       { id: 2, shape: 'triangle', cx: startX + 7, cy: startYBase + 7 + slots[1], vx: 0, vy: 0, hitR: SHAPES.triangle.hitR },
       { id: 3, shape: 'diamond',  cx: startX + 7, cy: startYBase + 7 + slots[2], vx: 0, vy: 0, hitR: SHAPES.diamond.hitR },
-      { id: 4, shape: 'cross',    cx: startX + 7, cy: startYBase + 7 + slots[3], vx: 0, vy: 0, hitR: SHAPES.cross.hitR },
+      { id: 4, shape: 'pentagon', cx: startX + 7, cy: startYBase + 7 + slots[3], vx: 0, vy: 0, hitR: SHAPES.pentagon.hitR },
       { id: 5, shape: 'hexagon',  cx: startX + 7, cy: startYBase + 7 + slots[4], vx: 0, vy: 0, hitR: SHAPES.hexagon.hitR }
     ];
     for (let i = 0; i < radroaches.length; i++) {
@@ -233,7 +227,7 @@
       clearInterval(countdownTimer);
       countdownTimer = null;
       gameState = 'RACING';
-      trackDirty = 1; 
+      trackDirty = 1;
     }
 
     h.flip();
@@ -255,19 +249,20 @@
     } else if (r.shape === 'diamond') {
       h.drawPoly([cx, cy - hf, cx + hf, cy, cx, cy + hf, cx - hf, cy], true);
       h.drawPoly([cx, cy - hf2, cx + hf2, cy, cx, cy + hf2, cx - hf2, cy], true);
-    } else if (r.shape === 'cross') {
-      const w1 = 3, w2 = 2;
+    } else if (r.shape === 'pentagon') {
       h.drawPoly([
-        cx - w1, cy - hf,  cx + w1, cy - hf,  cx + w1, cy - w1,
-        cx + hf, cy - w1,  cx + hf, cy + w1,  cx + w1, cy + w1,
-        cx + w1, cy + hf,  cx - w1, cy + hf,  cx - w1, cy + w1,
-        cx - hf, cy + w1,  cx - hf, cy - w1,  cx - w1, cy - w1
+        cx, cy - hf,
+        cx + hf * 0.951, cy - hf * 0.309,
+        cx + hf * 0.588, cy + hf * 0.809,
+        cx - hf * 0.588, cy + hf * 0.809,
+        cx - hf * 0.951, cy - hf * 0.309
       ], true);
       h.drawPoly([
-        cx - w2, cy - hf2,  cx + w2, cy - hf2,  cx + w2, cy - w2,
-        cx + hf2, cy - w2,  cx + hf2, cy + w2,  cx + w2, cy + w2,
-        cx + w2, cy + hf2,  cx - w2, cy + hf2,  cx - w2, cy + w2,
-        cx - hf2, cy + w2,  cx - hf2, cy - w2,  cx - w2, cy - w2
+        cx, cy - hf2,
+        cx + hf2 * 0.951, cy - hf2 * 0.309,
+        cx + hf2 * 0.588, cy + hf2 * 0.809,
+        cx - hf2 * 0.588, cy + hf2 * 0.809,
+        cx - hf2 * 0.951, cy - hf2 * 0.309
       ], true);
     } else if (r.shape === 'hexagon') {
       const q = hf / 2, q2 = hf2 / 2;
@@ -281,14 +276,15 @@
     h.drawRect(18, 18, 465, 298);
     h.drawRect(19, 19, 464, 297);
 
-    for (let i = 0; i < trackWalls.length; i += 8) {
+    for (let i = 0; i < trackWalls.length; i += 4) {
       const lx1 = trackWalls[i], ly1 = trackWalls[i+1], lx2 = trackWalls[i+2], ly2 = trackWalls[i+3];
       drawLineCached(lx1, ly1, lx2, ly2);
-      if (trackWalls[i+7] - trackWalls[i+5] < 6) {
-        // Horizontal wall — offset second line downward
+      // Double-pixel width: offset by 1 on the thin axis so the line reads clearly
+      const spanY = ly2 > ly1 ? ly2 - ly1 : ly1 - ly2;
+      const spanX = lx2 > lx1 ? lx2 - lx1 : lx1 - lx2;
+      if (spanY < spanX) {
         drawLineCached(lx1, ly1 + 1, lx2, ly2 + 1);
       } else {
-        // Vertical wall — offset second line rightward
         drawLineCached(lx1 + 1, ly1, lx2 + 1, ly2);
       }
     }
@@ -299,8 +295,8 @@
     h.setColor(3);
     h.fillRect(goalPos.x, goalPos.y, goalPos.x + goalPos.w, goalPos.y + goalPos.h);
     h.setColor(2);
-    h.fillRect(goalPos.x + 5, goalPos.y - 7, goalPos.x + 10, goalPos.y);
-    h.fillRect(goalPos.x - 5, goalPos.y + 5, goalPos.x, goalPos.y + 10);
+    h.fillRect(goalPos.x + 6, goalPos.y - 8, goalPos.x + 11, goalPos.y);
+    h.fillRect(goalPos.x - 6, goalPos.y + 6, goalPos.x, goalPos.y + 11);
   }
 
   // ─── Physics ──────────────────────────────────────────────────────────────
@@ -322,8 +318,10 @@
   }
 
   function checkWallCollision(r) {  "ram";
+
+    // ── Border walls ─────────────────────────────────────────────────────────
     let bounced = false;
-    const hr = r.hitR; 
+    const hr = r.hitR;
 
     if (r.cx - hr <= 18) {
       r.cx = 18 + hr; r.vx = Math.abs(r.vx); bounced = true;
@@ -336,86 +334,68 @@
       r.cy = 298 - hr; r.vy = -Math.abs(r.vy); bounced = true;
     }
 
-    for (let i = 0; i < trackWalls.length; i += 8) {
-      const wx1 = trackWalls[i+4]; // minX
-      const wy1 = trackWalls[i+5]; // minY
-      const wx2 = trackWalls[i+6]; // maxX
-      const wy2 = trackWalls[i+7]; // maxY
+    // ── Interior walls: circle vs line-segment ────────────────────────────────
 
-      if (r.cx + hr >= wx1 && r.cx - hr <= wx2 &&
-          r.cy + hr >= wy1 && r.cy - hr <= wy2) {
+    for (let i = 0; i < trackWalls.length; i += 4) {
+      const x1 = trackWalls[i],   y1 = trackWalls[i+1];
+      const x2 = trackWalls[i+2], y2 = trackWalls[i+3];
 
-        // Use penetration depth on each axis to find the true contact face.
-        // The axis with the smallest overlap is the one the roach just crossed —
-        // that is the face it hit, regardless of wall orientation.
-        // This correctly handles vertex/corner contacts that the old shape-based
-        // branch got wrong, causing teleports and bad bounce angles.
-        const penLeft  = r.cx + hr - wx1;
-        const penRight = wx2 - (r.cx - hr);
-        const penTop   = r.cy + hr - wy1;
-        const penBot   = wy2 - (r.cy - hr);
-        const penX = penLeft < penRight ? penLeft : penRight;
-        const penY = penTop  < penBot   ? penTop  : penBot;
+      // Project roach center onto the segment, clamped to [0,1]
+      const segDx = x2 - x1, segDy = y2 - y1;
+      const lenSq = segDx * segDx + segDy * segDy;
+      let t = lenSq > 0 ? ((r.cx - x1) * segDx + (r.cy - y1) * segDy) / lenSq : 0;
+      if (t < 0) t = 0; else if (t > 1) t = 1;
 
-        if (penX < penY) {
-          // Shallower penetration on X — hit a vertical face
-          if (penLeft < penRight) {
-            r.cx = wx1 - hr;
-          } else {
-            r.cx = wx2 + hr;
-          }
-          r.vx = -r.vx;
-          bounced = true;
-        } else {
-          // Shallower penetration on Y — hit a horizontal face
-          if (penTop < penBot) {
-            r.cy = wy1 - hr;
-          } else {
-            r.cy = wy2 + hr;
-          }
-          r.vy = -r.vy;
+      // Closest point on segment to roach center
+      const clx = x1 + t * segDx;
+      const cly = y1 + t * segDy;
+
+      // Vector from closest point to roach center
+      const ex = r.cx - clx;
+      const ey = r.cy - cly;
+      const distSq = ex * ex + ey * ey;
+
+      if (distSq < hr * hr && distSq > 0) {
+        const dist = Math.sqrt(distSq);
+        // Outward normal: direction from wall toward roach center
+        const nx = ex / dist;
+        const ny = ey / dist;
+
+        // Push roach out to just touching the wall surface
+        const pen = hr - dist;
+        r.cx += nx * pen;
+        r.cy += ny * pen;
+
+        // Reflect velocity along the outward normal
+        const dot = r.vx * nx + r.vy * ny;
+        if (dot < 0) {
+          // Only reflect if moving toward the wall (avoids double-reflection)
+          r.vx -= 2 * dot * nx;
+          r.vy -= 2 * dot * ny;
+
+          // Renormalize to preserve speed after reflection
+          const spd = Math.sqrt(r.vx * r.vx + r.vy * r.vy);
+          if (spd > 0) { r.vx = r.vx / spd * 3; r.vy = r.vy / spd * 3; }
+
+          jitterVelocity(r);
           bounced = true;
         }
       }
     }
 
     if (bounced) {
-      jitterVelocity(r);
-      if (r.cx - hr <= 18  && r.vx < 0) r.vx = -r.vx;
-      if (r.cx + hr >= 465 && r.vx > 0) r.vx = -r.vx;
-      if (r.cy - hr <= 18  && r.vy < 0) r.vy = -r.vy;
-      if (r.cy + hr >= 298 && r.vy > 0) r.vy = -r.vy;
-
-      // Enforce minimum normal velocity so shallow-angle hits always bounce cleanly away.
-      // 1.5 out of speed-3 means the roach can never leave a wall at less than 30 degrees.
-      // We track which axis was the collision normal and boost it if below threshold,
-      // then renormalize to preserve speed.
       const vxAbs = r.vx < 0 ? -r.vx : r.vx;
       const vyAbs = r.vy < 0 ? -r.vy : r.vy;
       let fixed = 0;
-      if (r.cx - hr <= 18 + 1 || r.cx + hr >= 465 - 1) {
-        // X is the normal axis (border left/right)
-        if (vxAbs < 1.5) { r.vx = r.vx < 0 ? -1.5 : 1.5; fixed = 1; }
+      if (r.cx - hr <= 19) {
+        if (vxAbs < 1.5) { r.vx = 1.5; fixed = 1; }
+      } else if (r.cx + hr >= 464) {
+        if (vxAbs < 1.5) { r.vx = -1.5; fixed = 1; }
       }
-      if (r.cy - hr <= 18 + 1 || r.cy + hr >= 298 - 1) {
-        // Y is the normal axis (border top/bottom)
-        if (vyAbs < 1.5) { r.vy = r.vy < 0 ? -1.5 : 1.5; fixed = 1; }
-      }
-      for (let i = 0; i < trackWalls.length; i += 8) {
-        const wx1 = trackWalls[i+4], wy1 = trackWalls[i+5];
-        const wx2 = trackWalls[i+6], wy2 = trackWalls[i+7];
-        if (r.cx + hr >= wx1 - 1 && r.cx - hr <= wx2 + 1 &&
-            r.cy + hr >= wy1 - 1 && r.cy - hr <= wy2 + 1) {
-          // Mirror the penetration-depth axis decision from collision so enforcement
-          // always targets the same axis that was actually reflected.
-          const pX = (r.cx + hr - wx1) < (wx2 - (r.cx - hr)) ? (r.cx + hr - wx1) : (wx2 - (r.cx - hr));
-          const pY = (r.cy + hr - wy1) < (wy2 - (r.cy - hr)) ? (r.cy + hr - wy1) : (wy2 - (r.cy - hr));
-          if (pX < pY) {
-            if (vxAbs < 1.5) { r.vx = r.vx < 0 ? -1.5 : 1.5; fixed = 1; }
-          } else {
-            if (vyAbs < 1.5) { r.vy = r.vy < 0 ? -1.5 : 1.5; fixed = 1; }
-          }
-        }
+      if (r.cy - hr <= 19) {
+        if (vyAbs < 1.5) { r.vy = 1.5; fixed = 1; }
+      } else if (r.cy + hr >= 297) {
+        if (vyAbs < 1.5) { r.vy = -1.5; fixed = 1; }
       }
       if (fixed) {
         const spd = Math.sqrt(r.vx * r.vx + r.vy * r.vy);
@@ -446,8 +426,8 @@
           const relVel = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
           if (relVel >= 0) continue;
 
-          const aN = a.vx * nx + a.vy * ny; // a's speed along collision normal
-          const bN = b.vx * nx + b.vy * ny; // b's speed along collision normal
+          const aN = a.vx * nx + a.vy * ny;
+          const bN = b.vx * nx + b.vy * ny;
 
           a.vx += (bN - aN) * nx; a.vy += (bN - aN) * ny;
           b.vx += (aN - bN) * nx; b.vy += (aN - bN) * ny;
@@ -480,13 +460,12 @@
     h.setColor(0);
     for (let i = 0; i < radroaches.length; i++) {
       const r = radroaches[i];
-      const hr = r.hitR; 
+      const hr = r.hitR;
       const dx1 = r.cx - hr - 2, dy1 = r.cy - hr - 2;
       const dx2 = r.cx + hr + 2, dy2 = r.cy + hr + 2;
-      
+
       h.fillRect(dx1, dy1, dx2, dy2);
-      
-      // Save directly into the pre-allocated Int16Array
+
       dirty[dIdx++] = dx1;
       dirty[dIdx++] = dy1;
       dirty[dIdx++] = dx2;
@@ -505,7 +484,7 @@
     for (let i = 0; i < 20; i += 4) {
       h.setClipRect(dirty[i], dirty[i+1], dirty[i+2], dirty[i+3]);
       drawTrack();
-      h.setClipRect(0, 0, 480, 320); 
+      h.setClipRect(0, 0, 480, 320);
     }
 
     for (let i = 0; i < radroaches.length; i++) {
@@ -553,7 +532,7 @@
   // ─── Init ─────────────────────────────────────────────────────────────────
 
   showTitleScreen();
-  mainLoopInterval = setInterval(mainLoop, 33); // ~30fps
+  mainLoopInterval = setInterval(mainLoop, 21); // ~20fps
 
   return {
     id: "RADROACHRACES",
