@@ -118,33 +118,20 @@
     h.setColor(0).fillRect(0, 0, 480, 320);
     h.setColor(2).drawRect(18, 18, 465, 298);
 
-    h.setFont("Monofonto23").setFontAlign(0, -1).setColor(3);
-    h.drawString("Radroach Races", 240, 55);
+    h.setFont("Monofonto23").setFontAlign(0, -1).setColor(3).drawString("Radroach Races", 240, 55);
 
-    h.setColor(2);
-    h.drawLine(55, 180, 425, 180);
-    h.drawLine(55, 200, 425, 200);
+    h.setColor(2).drawLine(55, 180, 425, 180).drawLine(55, 200, 425, 200);
     for (let fx = 75; fx < 425; fx += 35) {
       h.fillRect(fx, 150, fx + 15, 230);
     }
 
     for (let gx = 35; gx < 445; gx += 12) {
-      h.drawLine(gx, 230, gx - 4, 210);
-      h.drawLine(gx + 3, 230, gx + 6, 205);
+      h.drawLine(gx, 230, gx - 4, 210).drawLine(gx + 3, 230, gx + 6, 205);
     }
 
-    h.setColor(3);
-    h.fillEllipse(200, 165, 280, 215);
-    h.fillCircle(240, 150, 18);
-    h.drawLine(236, 138, 205, 105);
-    h.drawLine(244, 138, 275, 105);
-    h.drawPoly([205, 165, 180, 175, 165, 200], false);
-    h.drawPoly([200, 190, 175, 200, 160, 230], false);
-    h.drawPoly([275, 165, 300, 175, 315, 200], false);
-    h.drawPoly([280, 190, 305, 200, 320, 230], false);
+    h.setColor(3).fillEllipse(200, 165, 280, 215).fillCircle(240, 150, 18).drawLine(236, 138, 205, 105).drawLine(244, 138, 275, 105).drawPoly([205, 165, 180, 175, 165, 200], false).drawPoly([200, 190, 175, 200, 160, 230], false).drawPoly([275, 165, 300, 175, 315, 200], false).drawPoly([280, 190, 305, 200, 320, 230], false);
 
-    h.setFont("Monofonto16").setFontAlign(0, -1).setColor(3);
-    h.drawString("PRESS LEFT WHEEL TO START!", 240, 270);
+    h.setFont("Monofonto16").setFontAlign(0, -1).setColor(3).drawString("PRESS LEFT WHEEL TO START!", 240, 270);
 
     h.flip();
     Pip.lastFlip = getTime();
@@ -155,7 +142,7 @@
   function handleKnobStart(dir) {
     if (dir !== 0) return;
     if (gameState === 'TITLE_SCREEN') {
-      Pip.audioStart('HOLO/RADROACH_RACES/BUGLE.WAV');
+      Pip.audioStart('HOLO/RADROACH_RACES/assets/BUGLE.WAV');
       startCountdown();
     } else if (gameState === 'GAMEOVER') {
       showTitleScreen();
@@ -220,8 +207,7 @@
     }
 
     if (countdownValue > 0) {
-      h.setFont("Monofonto96").setFontAlign(0, 0).setColor(3);
-      h.drawString(countdownValue.toString(), 240, 160);
+      h.setFont("Monofonto96").setFontAlign(0, 0).setColor(3).drawString(countdownValue.toString(), 240, 160);
       countdownValue--;
     } else {
       clearInterval(countdownTimer);
@@ -229,9 +215,6 @@
       gameState = 'RACING';
       trackDirty = 1;
     }
-
-    h.flip();
-    Pip.lastFlip = getTime();
   }
 
   // ─── Drawing ──────────────────────────────────────────────────────────────
@@ -272,9 +255,7 @@
   }
 
   function drawTrack() {
-    h.setColor(3);
-    h.drawRect(18, 18, 465, 298);
-    h.drawRect(19, 19, 464, 297);
+    h.setColor(3).drawRect(18, 18, 465, 298).drawRect(19, 19, 464, 297);
 
     for (let i = 0; i < trackWalls.length; i += 4) {
       const lx1 = trackWalls[i], ly1 = trackWalls[i+1], lx2 = trackWalls[i+2], ly2 = trackWalls[i+3];
@@ -289,14 +270,10 @@
       }
     }
 
-    h.setFont("Monofonto14").setFontAlign(-1, -1).setColor(2);
-    h.drawString("Map " + (currentMapId + 1), 25, 25);
+    h.setFont("Monofonto14").setFontAlign(-1, -1).setColor(2).drawString("Map " + (currentMapId + 1), 25, 25);
 
-    h.setColor(3);
-    h.fillRect(goalPos.x, goalPos.y, goalPos.x + goalPos.w, goalPos.y + goalPos.h);
-    h.setColor(2);
-    h.fillRect(goalPos.x + 6, goalPos.y - 8, goalPos.x + 11, goalPos.y);
-    h.fillRect(goalPos.x - 6, goalPos.y + 6, goalPos.x, goalPos.y + 11);
+    h.setColor(3).fillRect(goalPos.x, goalPos.y, goalPos.x + goalPos.w, goalPos.y + goalPos.h);
+    h.setColor(2).fillRect(goalPos.x + 6, goalPos.y - 8, goalPos.x + 11, goalPos.y).fillRect(goalPos.x - 6, goalPos.y + 6, goalPos.x, goalPos.y + 11);
   }
 
   // ─── Physics ──────────────────────────────────────────────────────────────
@@ -494,7 +471,7 @@
           r.cy + hr >= goalPos.y && r.cy - hr <= goalPos.y + goalPos.hitH) {
         gameState = 'GAMEOVER';
         winnerId = r.id;
-        Pip.audioStart('HOLO/RADROACH_RACES/WINNER.WAV');
+        Pip.audioStart('HOLO/RADROACH_RACES/assets/WINNER.WAV');
         break;
       }
     }
@@ -515,7 +492,7 @@
     h.setColor(0).fillRect(120, 130, 360, 190);
     h.setColor(3).drawRect(122, 132, 358, 188);
 
-    h.setFont("Monofonto16").setFontAlign(0, -1).setColor(2);
+    h.setFont("Monofonto16").setFontAlign(0, -1).setColor(3);
     h.drawString(SHAPE_NAMES[winnerId] + " ROACH WINS!", 240, 142);
     h.setFont("Monofonto14");
     h.drawString("PRESS LEFT WHEEL TO RACE AGAIN!", 240, 168);
@@ -532,7 +509,7 @@
   // ─── Init ─────────────────────────────────────────────────────────────────
 
   showTitleScreen();
-  mainLoopInterval = setInterval(mainLoop, 21); // ~20fps
+  mainLoopInterval = setInterval(mainLoop, 33); // ~30fps
 
   return {
     id: "RADROACHRACES",

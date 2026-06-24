@@ -9,11 +9,11 @@
 - [YouTube Channel](https://www.youtube.com/@TheeohnM)
 - [GitHub](https://github.com/Theeohn)
 - [Pip-Boy](https://www.Pip-Boy.com)
-- [Pip-Boy Apps](https://github.com/CodyTolene/pip-boy-apps)
+- [Pip-Boy Apps](https://github.com/CodyTolene/pip-boy-3000-holotapes)
 
 ### Description
 
-A version of the internet famous "Horse Race Tests" game now for your Pip-boy. Start the game up, 5 seconds to place your bets and they're off! Using logic similar to the DVD bouncing logo to race to the mutfruit at the end, who will win? 7 seperate tracks, 5 shapes for your roaches. Endless hours of fun watching, betting, and forming your own headcanons!
+A version of the internet famous "Horse Race Tests" game now for your Pip-boy. Start the game up, eight seconds to place your bets and they're off! Using logic similar to the DVD bouncing logo to race to the mutfruit at the end, who will win? Five seperate tracks, five shapes for your roaches. Endless hours of fun watching, betting, and forming your own headcanons!
 
 ### Controls
 
