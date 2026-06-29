@@ -7,6 +7,8 @@
 
 (function() {
   const drawLineCached = h.drawLine.bind(h);
+  const fillRectCached = h.fillRect.bind(h);
+  const drawStringCached = h.drawString.bind(h);
 
   const dirty = new Int16Array(20);
 
@@ -34,6 +36,17 @@
 
   const ROACH_LETTERS = { 1: 'R', 2: 'O', 3: 'A', 4: 'C', 5: 'H' };
 
+  const ROACH_HIT_R = 10.7;
+  const ROACH_R_SUM = ROACH_HIT_R * 2; // a.hitR + b.hitR is always this
+
+  const JITTER_COS = new Float32Array(21);
+  const JITTER_SIN = new Float32Array(21);
+  for (let jd = -10; jd <= 10; jd++) {
+    const jrad = jd * 0.017453292519943295;
+    JITTER_COS[jd + 10] = Math.cos(jrad);
+    JITTER_SIN[jd + 10] = Math.sin(jrad);
+  }
+
   // ─── Map Data ─────────────────────────────────────────────────────────────
   //
   // Format per map entry in MAP_DATA:
@@ -46,20 +59,20 @@
 
   const MAP_DATA = new Int16Array([
     // Map 1
-    420, 205, 25, 90,  0,
+    420, 205, 22, 62,  0,
 
     // Map 2
-    392, 260, 40, 45,  2,
+    392, 260, 40, 27,  2,
     160, 18, 160, 200,
     326, 113, 326, 298,
 
     // Map 3
-    340, 150, 24, 110,  2,
+    340, 150, 22, 110,  2,
     160, 95, 160, 225,
     323, 75, 323, 245,
 
     // Map 4
-    32, 220, 28, 38,  3,
+    32, 220, 22, 38,  3,
     18, 160, 340, 160,
     395, 18, 465, 94,
     395, 298, 465, 226,
@@ -77,7 +90,7 @@
     330, 18, 330, 165,
 
     // Map 7
-    357, 130, 30, 110,  4,
+    357, 130, 22, 110,  4,
     160, 160, 223, 70,
     95, 160, 158, 250,
     310, 160, 373, 70,
@@ -91,14 +104,14 @@
     316, 175, 316, 258,
 
     // Map 9
-    172, 172, 25, 38,  4,
+    172, 172, 22, 38,  4,
     18, 160, 219, 160,
     175, 235, 246, 120,
     350, 18, 380, 145,
     290, 220, 385, 220,
 
     // Map 10
-    250, 186, 28, 32,  5,
+    250, 186, 22, 32,  5,
     18, 145, 305, 145,
     90, 145, 90, 210,
     305, 145, 305, 238,
@@ -181,11 +194,11 @@
       const tmp = slots[s]; slots[s] = slots[sv]; slots[sv] = tmp;
     }
     radroaches = [
-      { id: 1, cx: startX + 7 + (horizSpawn ? slots[0] : 0), cy: startYBase + 7 + (horizSpawn ? 0 : slots[0]), vx: 0, vy: 0, hitR: 10.7 },
-      { id: 2, cx: startX + 7 + (horizSpawn ? slots[1] : 0), cy: startYBase + 7 + (horizSpawn ? 0 : slots[1]), vx: 0, vy: 0, hitR: 10.7 },
-      { id: 3, cx: startX + 7 + (horizSpawn ? slots[2] : 0), cy: startYBase + 7 + (horizSpawn ? 0 : slots[2]), vx: 0, vy: 0, hitR: 10.7 },
-      { id: 4, cx: startX + 7 + (horizSpawn ? slots[3] : 0), cy: startYBase + 7 + (horizSpawn ? 0 : slots[3]), vx: 0, vy: 0, hitR: 10.7 },
-      { id: 5, cx: startX + 7 + (horizSpawn ? slots[4] : 0), cy: startYBase + 7 + (horizSpawn ? 0 : slots[4]), vx: 0, vy: 0, hitR: 10.7 }
+      { id: 1, cx: startX + 7 + (horizSpawn ? slots[0] : 0), cy: startYBase + 7 + (horizSpawn ? 0 : slots[0]), vx: 0, vy: 0 },
+      { id: 2, cx: startX + 7 + (horizSpawn ? slots[1] : 0), cy: startYBase + 7 + (horizSpawn ? 0 : slots[1]), vx: 0, vy: 0 },
+      { id: 3, cx: startX + 7 + (horizSpawn ? slots[2] : 0), cy: startYBase + 7 + (horizSpawn ? 0 : slots[2]), vx: 0, vy: 0 },
+      { id: 4, cx: startX + 7 + (horizSpawn ? slots[3] : 0), cy: startYBase + 7 + (horizSpawn ? 0 : slots[3]), vx: 0, vy: 0 },
+      { id: 5, cx: startX + 7 + (horizSpawn ? slots[4] : 0), cy: startYBase + 7 + (horizSpawn ? 0 : slots[4]), vx: 0, vy: 0 }
     ];
     for (let i = 0; i < radroaches.length; i++) {
       setRandomVelocity(radroaches[i], 4);
@@ -201,10 +214,7 @@
 
     h.setColor(0).fillRect(0, 0, 480, 320);
     drawTrack();
-
-    for (let i = 0; i < radroaches.length; i++) {
-      drawShape(radroaches[i]);
-    }
+    drawAllRoaches();
 
     if (countdownValue > 0) {
       h.setFont("Monofonto96").setFontAlign(0, 0).setColor(3).drawString(countdownValue.toString(), 240, 160);
@@ -221,57 +231,74 @@
 
   // ─── Drawing ──────────────────────────────────────────────────────────────
 
-  function drawShape(r) {
-    h.setColor(3).setFont("Monofonto23").setFontAlign(0, 0)
-      .drawString(ROACH_LETTERS[r.id], r.cx, r.cy);
+  function drawAllRoaches() {  "ram";
+    h.setColor(3).setFont("Monofonto23").setFontAlign(0, 0);
+    for (let i = 0; i < radroaches.length; i++) {
+      const r = radroaches[i];
+      drawStringCached(ROACH_LETTERS[r.id], r.cx, r.cy);
+    }
   }
 
-  function drawTrack() {
-    h.setColor(3).drawRect(18, 18, 465, 298);
+  function drawTrack(clipX1, clipY1, clipX2, clipY2) {  "ram";
+    // No region given -> drawing everything (countdown / full redraw), so
+    // default to the whole screen and every element passes its overlap test.
+    if (clipX1 === undefined) { clipX1 = 0; clipY1 = 0; clipX2 = 480; clipY2 = 320; }
+
+    if (clipX1 <= 465 && clipX2 >= 18 && clipY1 <= 298 && clipY2 >= 18) {
+      h.setColor(3).drawRect(18, 18, 465, 298);
+    }
 
     for (let i = 0; i < trackWalls.length; i += 4) {
       const lx1 = trackWalls[i], ly1 = trackWalls[i+1], lx2 = trackWalls[i+2], ly2 = trackWalls[i+3];
+      const wMinX = lx1 < lx2 ? lx1 : lx2, wMaxX = lx1 < lx2 ? lx2 : lx1;
+      const wMinY = ly1 < ly2 ? ly1 : ly2, wMaxY = ly1 < ly2 ? ly2 : ly1;
+      if (wMaxX < clipX1 || wMinX > clipX2 || wMaxY < clipY1 || wMinY > clipY2) continue;
       drawLineCached(lx1, ly1, lx2, ly2);
     }
 
-    h.setFont("Monofonto14").setFontAlign(-1, -1).setColor(3).drawString("Map " + (currentMapId + 1), 225, 302);
+    if (clipX2 >= 225 && clipX1 <= 320 && clipY2 >= 302 && clipY1 <= 316) {
+      h.setFont("Monofonto14").setFontAlign(-1, -1).setColor(3).drawString("Map " + (currentMapId + 1), 225, 302);
+    }
 
-    h.setColor(3).fillRect(goalPos.x, goalPos.y, goalPos.x + goalPos.w, goalPos.y + goalPos.h).setColor(2).fillRect(goalPos.x + 6, goalPos.y - 8, goalPos.x + 11, goalPos.y).fillRect(goalPos.x - 6, goalPos.y + 6, goalPos.x, goalPos.y + 11);
+    const goalX1 = goalPos.x - 6, goalY1 = goalPos.y - 8;
+    const goalX2 = goalPos.x + goalPos.w + 6, goalY2 = goalPos.y + goalPos.h + 11;
+    if (clipX2 >= goalX1 && clipX1 <= goalX2 && clipY2 >= goalY1 && clipY1 <= goalY2) {
+      h.setColor(3).fillRect(goalPos.x, goalPos.y, goalPos.x + goalPos.w, goalPos.y + goalPos.h).setColor(2).fillRect(goalPos.x + 6, goalPos.y - 8, goalPos.x + 11, goalPos.y).fillRect(goalPos.x - 6, goalPos.y + 6, goalPos.x, goalPos.y + 11);
+    }
   }
 
   // ─── Physics ──────────────────────────────────────────────────────────────
 
   function setRandomVelocity(r, speed) {
-    const deg = Math.randInt(360);
+    const deg = Math.randInt(400);
     const rad = deg * 0.017453292519943295;
     r.vx = Math.cos(rad) * speed;
     r.vy = Math.sin(rad) * speed;
   }
 
-  function jitterVelocity(r) {
-    const speed = Math.sqrt(r.vx * r.vx + r.vy * r.vy);
-    const curAngle = Math.atan2(r.vy, r.vx);
-    const jitterDeg = Math.randInt(21) - 10;
-    const newAngle = curAngle + jitterDeg * 0.017453292519943295;
-    r.vx = Math.cos(newAngle) * speed;
-    r.vy = Math.sin(newAngle) * speed;
+  function jitterVelocity(r) {  "ram";
+    const idx = Math.randInt(21); // 0..20 maps to -10..+10 degrees
+    const c = JITTER_COS[idx], s = JITTER_SIN[idx];
+    const vx = r.vx, vy = r.vy;
+    r.vx = vx * c - vy * s;
+    r.vy = vx * s + vy * c;
   }
 
   function checkWallCollision(r) {  "ram";
 
     // ── Border walls ─────────────────────────────────────────────────────────
     let bounced = false;
-    const hr = r.hitR;
+    const hr = ROACH_HIT_R;
 
     if (r.cx - hr <= 18) {
-      r.cx = 18 + hr; r.vx = Math.abs(r.vx); bounced = true;
+      r.cx = 18 + hr; r.vx = r.vx < 0 ? -r.vx : r.vx; bounced = true;
     } else if (r.cx + hr >= 465) {
-      r.cx = 465 - hr; r.vx = -Math.abs(r.vx); bounced = true;
+      r.cx = 465 - hr; r.vx = r.vx > 0 ? -r.vx : r.vx; bounced = true;
     }
     if (r.cy - hr <= 18) {
-      r.cy = 18 + hr; r.vy = Math.abs(r.vy); bounced = true;
+      r.cy = 18 + hr; r.vy = r.vy < 0 ? -r.vy : r.vy; bounced = true;
     } else if (r.cy + hr >= 298) {
-      r.cy = 298 - hr; r.vy = -Math.abs(r.vy); bounced = true;
+      r.cy = 298 - hr; r.vy = r.vy > 0 ? -r.vy : r.vy; bounced = true;
     }
 
     // ── Interior walls: circle vs line-segment ────────────────────────────────
@@ -315,7 +342,7 @@
     }
 
     if (bounced) {
-      if (getTime() - lastFlapTime >= 0.25) {
+      if (getTime() - lastFlapTime >= 0.2) {
         lastFlapTime = getTime();
         Pip.audioStart('HOLO/RADROACH_RACES/assets/FLAP.WAV');
       }
@@ -345,7 +372,7 @@
       for (let j = i + 1; j < radroaches.length; j++) {
         const a = radroaches[i];
         const b = radroaches[j];
-        const rSum = a.hitR + b.hitR;
+        const rSum = ROACH_R_SUM;
 
         const dx = a.cx - b.cx;
         const dy = a.cy - b.cy;
@@ -374,6 +401,11 @@
           if (sMag > 0) { b.vx = b.vx / sMag * 4; b.vy = b.vy / sMag * 4; }
           jitterVelocity(a);
           jitterVelocity(b);
+
+          if (getTime() - lastFlapTime >= 0.2) {
+            lastFlapTime = getTime();
+            Pip.audioStart('HOLO/RADROACH_RACES/assets/FLAP.WAV');
+          }
         }
       }
     }
@@ -386,7 +418,7 @@
       trackDirty = 0;
       h.setColor(0).fillRect(0, 0, 480, 320);
       drawTrack();
-      for (let i = 0; i < radroaches.length; i++) drawShape(radroaches[i]);
+      drawAllRoaches();
       h.flip();
       Pip.lastFlip = getTime();
       return;
@@ -394,13 +426,13 @@
 
     let dIdx = 0;
     h.setColor(0);
+    const hr = ROACH_HIT_R;
     for (let i = 0; i < radroaches.length; i++) {
       const r = radroaches[i];
-      const hr = r.hitR;
       const dx1 = r.cx - hr - 2, dy1 = r.cy - hr - 2;
       const dx2 = r.cx + hr + 2, dy2 = r.cy + hr + 2;
 
-      h.fillRect(dx1, dy1, dx2, dy2);
+      fillRectCached(dx1, dy1, dx2, dy2);
 
       dirty[dIdx++] = dx1;
       dirty[dIdx++] = dy1;
@@ -416,17 +448,22 @@
     }
     checkRoachCollisions();
 
-    for (let i = 0; i < 20; i += 4) {
-      h.setClipRect(dirty[i], dirty[i+1], dirty[i+2], dirty[i+3]);
-      drawTrack();
-      h.setClipRect(0, 0, 480, 320);
+    let minX = dirty[0], minY = dirty[1], maxX = dirty[2], maxY = dirty[3];
+    for (let i = 4; i < 20; i += 4) {
+      if (dirty[i]   < minX) minX = dirty[i];
+      if (dirty[i+1] < minY) minY = dirty[i+1];
+      if (dirty[i+2] > maxX) maxX = dirty[i+2];
+      if (dirty[i+3] > maxY) maxY = dirty[i+3];
     }
+    h.setClipRect(minX, minY, maxX, maxY);
+    drawTrack(minX, minY, maxX, maxY);
+    h.setClipRect(0, 0, 480, 320);
 
+    const goalX1 = goalPos.x - hr, goalX2 = goalPos.x + goalPos.hitW + hr;
+    const goalY1 = goalPos.y - hr, goalY2 = goalPos.y + goalPos.hitH + hr;
     for (let i = 0; i < radroaches.length; i++) {
       const r = radroaches[i];
-      const hr = r.hitR;
-      if (r.cx + hr >= goalPos.x && r.cx - hr <= goalPos.x + goalPos.hitW &&
-          r.cy + hr >= goalPos.y && r.cy - hr <= goalPos.y + goalPos.hitH) {
+      if (r.cx >= goalX1 && r.cx <= goalX2 && r.cy >= goalY1 && r.cy <= goalY2) {
         gameState = 'GAMEOVER';
         winnerId = r.id;
         Pip.audioStart('HOLO/RADROACH_RACES/assets/WINNER.WAV');
@@ -434,9 +471,7 @@
       }
     }
 
-    for (let i = 0; i < radroaches.length; i++) {
-      drawShape(radroaches[i]);
-    }
+    drawAllRoaches();
 
     if (gameState === 'GAMEOVER') {
       displayWinner();
@@ -449,12 +484,12 @@
   function displayWinner() {
     h.setColor(0).fillRect(120, 130, 360, 190).setColor(3).drawRect(122, 132, 358, 188);
 
-    h.setFont("Monofonto16").setFontAlign(0, -1).setColor(3).drawString('"' + ROACH_LETTERS[winnerId] + '" Roach Wins!', 240, 140).setFont("Monofonto14").drawString("PRESS LEFT WHEEL TO RACE AGAIN!", 240, 167);
+    h.setFont("Monofonto16").setFontAlign(0, -1).setColor(3).drawString('"' + ROACH_LETTERS[winnerId] + '" ROACH WINS!!!', 240, 140).setFont("Monofonto14").drawString("Press left wheel to race again!", 240, 167);
   }
 
   // ─── Main Loop ────────────────────────────────────────────────────────────
 
-  function mainLoop() {
+  function mainLoop() {  "ram";
     if (gameState === 'RACING') {
       updatePhysics();
     }
