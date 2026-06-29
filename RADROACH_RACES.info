@@ -1,0 +1,8 @@
+{
+  "id": "RADROACH_RACES",
+  "name": "Radroach Races",
+  "version": "1.0.0",
+  "files": "HOLO/RADROACH_RACES/APP.JS",
+  "src": "HOLO/RADROACH_RACES/APP.JS",
+  "icon": "APPINFO/HOLO.IMG"
+}
