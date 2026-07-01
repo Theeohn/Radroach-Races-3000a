@@ -133,7 +133,7 @@
 
     h.setColor(0).fillRect(0, 0, 480, 320).setColor(2).drawRect(18, 18, 465, 298);
 
-    h.setFont("Monofonto36").setFontAlign(0, -1).setColor(3).drawString("RADROACH RACES", 240, 52);
+    h.setFont("Monofonto36").setFontAlign(0, -1).setColor(3).drawString("RADROACH RACES", 240, 52).setFont("Monofonto18").setFontAlign(0, -1).setColor(2).drawString("by Theeohn", 360, 94);
 
     h.setColor(2).drawLine(55, 180, 425, 180).drawLine(55, 200, 425, 200);
     for (let fx = 75; fx < 425; fx += 35) {
